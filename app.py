@@ -9,50 +9,27 @@ from io import BytesIO
 
 st.set_page_config(page_title="DJIM / DJIM Electrónica", page_icon="📄", layout="centered")
 
-# ─────────────────────────────────────────────
-# CSS DARK MODE
-# ─────────────────────────────────────────────
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
-
 html, body, [class*="css"] { font-family: 'IBM Plex Sans', sans-serif; }
-.main > div { padding-top: 1rem; }
-
 .djim-header {
     background: linear-gradient(135deg, #1e2440 0%, #2a3060 100%);
-    border-radius: 12px;
-    padding: 1.8rem 2.5rem;
-    margin-bottom: 1.5rem;
+    border-radius: 12px; padding: 1.8rem 2.5rem; margin-bottom: 1.5rem;
     border-left: 5px solid #4f8ef7;
 }
 .djim-header h1 { color: #fff; font-size: 1.7rem; font-weight: 600; margin: 0 0 0.3rem 0; }
 .djim-header p { color: #7b8db0; font-size: 0.85rem; margin: 0; font-family: 'IBM Plex Mono', monospace; }
-
 .section-title {
-    font-size: 0.7rem;
-    font-weight: 600;
-    letter-spacing: 2px;
-    text-transform: uppercase;
-    color: #4f8ef7;
-    margin: 2rem 0 0.8rem 0;
-    padding-bottom: 0.5rem;
-    border-bottom: 1px solid #e0e8f0;
+    font-size: 0.7rem; font-weight: 600; letter-spacing: 2px;
+    text-transform: uppercase; color: #4f8ef7;
+    margin: 2rem 0 0.8rem 0; padding-bottom: 0.5rem; border-bottom: 1px solid #e0e8f0;
 }
-
 .alerta-ok {
-    background: #e8f5e9;
-    border: 1px solid #a5d6a7;
-    border-radius: 8px;
-    padding: 0.8rem 1.2rem;
-    color: #2e7d32;
-    font-weight: 500;
-    font-size: 0.9rem;
-    margin: 0.5rem 0;
+    background: #e8f5e9; border: 1px solid #a5d6a7; border-radius: 8px;
+    padding: 0.8rem 1.2rem; color: #2e7d32; font-weight: 500; font-size: 0.9rem; margin: 0.5rem 0;
 }
-
 #GithubIcon { visibility: hidden; }
-header[data-testid="stHeader"] { background: transparent; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -65,30 +42,11 @@ st.markdown("""
 
 TEMPLATE_PATH = "template_djim.xlsx"
 
-# ─────────────────────────────────────────────
-# CALLBACKS
-# ─────────────────────────────────────────────
+# ─── INICIALIZAR SESSION STATE ───
+if "n_items" not in st.session_state:
+    st.session_state.n_items = 0
 
-def agregar_item():
-    st.session_state.items.append({
-        'tipo': 'ENGINE',
-        'dnrpa_file': None,
-        'anio_fab_manual': '',
-    })
-
-def eliminar_item(idx):
-    st.session_state.items.pop(idx)
-
-# ─────────────────────────────────────────────
-# INICIALIZAR SESSION STATE
-# ─────────────────────────────────────────────
-
-if 'items' not in st.session_state:
-    st.session_state.items = []
-
-# ─────────────────────────────────────────────
-# UTILIDADES PDF
-# ─────────────────────────────────────────────
+# ─── UTILIDADES PDF ───
 
 def extract_text_pdfplumber(pdf_bytes):
     text = ""
@@ -101,7 +59,6 @@ def extract_text_pdfplumber(pdf_bytes):
     except:
         pass
     return text.strip()
-
 
 def ocr_pdf_bytes(pdf_bytes, label):
     tmp_pdf = f"/tmp/{label}.pdf"
@@ -118,22 +75,17 @@ def ocr_pdf_bytes(pdf_bytes, label):
         except: pass
     return text
 
-
 def get_text(pdf_bytes, label):
     text = extract_text_pdfplumber(pdf_bytes)
     if not text:
         text = ocr_pdf_bytes(pdf_bytes, label)
     return text
 
-
-# ─────────────────────────────────────────────
-# PARSEO DI
-# ─────────────────────────────────────────────
+# ─── PARSEO DI ───
 
 def parsear_di(text):
     datos = {}
     alertas = []
-
     m = re.search(r'\b(\d{2})\s+(\d{3})\s+([A-Z]{2}\d{2})\s+(\d+)\s+([A-Z])\b', text)
     if m:
         anio, aduana, tipo, nro, dc = m.groups()
@@ -145,12 +97,10 @@ def parsear_di(text):
         datos['nro_despacho'] = ''
         datos['anio'] = ''
         datos['id_aduana'] = ''
-
     fechas = re.findall(r'\b(\d{2}/\d{2}/\d{4})\b', text)
     datos['fecha_nac'] = fechas[0] if fechas else ''
     if not fechas:
         alertas.append("❌ No se encontró fecha de oficialización en el DI.")
-
     cuits = re.findall(r'\b(\d{2}-\d{8}-\d{1})\b', text)
     if cuits:
         datos['cuit_importador'] = cuits[0]
@@ -159,14 +109,11 @@ def parsear_di(text):
         alertas.append("❌ No se encontró CUIT del importador en el DI.")
         datos['cuit_importador'] = ''
         datos['cuit_comprador'] = ''
-
     datos['cuit_despachante'] = cuits[1] if len(cuits) >= 2 else '20-22824212-9'
     if len(cuits) < 2:
         alertas.append("⚠️ No se encontró CUIT del despachante. Se usará el valor por defecto.")
-
     m = re.search(r'(FINNING\s+\S+(?:\s+\S+){1,3})', text)
     datos['importador'] = m.group(1).strip() if m else 'FINNING SOLUCIONES MINERAS SA'
-
     PAISES = {
         'ESTADOS UNIDOS': '212', 'JAPON': '119', 'ALEMANIA': '101',
         'BRASIL': '023', 'CHINA': '156', 'REINO UNIDO': '826',
@@ -179,24 +126,17 @@ def parsear_di(text):
             break
     if not datos['pais_procedencia']:
         alertas.append("⚠️ No se encontró país de procedencia. Ingresá el código manualmente.")
-
     m = re.search(r'REGIMEN[^0-9]*(\d{1,3})', text, re.IGNORECASE)
     datos['regimen'] = m.group(1) if m else '20'
-
     m = re.search(r'ZA\(0*(\d{4})\)', text)
     datos['anio_fab_di'] = m.group(1) if m else ''
-
     return datos, alertas
 
-
-# ─────────────────────────────────────────────
-# PARSEO DNRPA
-# ─────────────────────────────────────────────
+# ─── PARSEO DNRPA ───
 
 def parsear_dnrpa(text, label=""):
     datos = {}
     alertas = []
-
     m = re.search(r'(\d{3})\s+([A-Z]+)\s+(\w+)\s+(\w+)', text)
     if m:
         datos['id_marca'] = m.group(1)
@@ -207,7 +147,6 @@ def parsear_dnrpa(text, label=""):
         alertas.append(f"❌ No se encontró marca/modelo en DNRPA {label}.")
         datos['id_marca'] = ''
         datos['id_modelo'] = ''
-
     datos['tipos'] = {}
     lines = text.split('\n')
     for i, line in enumerate(lines):
@@ -219,16 +158,11 @@ def parsear_dnrpa(text, label=""):
             peso_m = re.search(r'(\d[\d,\.]+)\s*(KGS?|C\.C\.)', contexto, re.IGNORECASE)
             peso = peso_m.group(1).replace(',', '').replace('.', '') if peso_m else ''
             datos['tipos'][tipo_key] = {'codigo': codigo, 'peso': peso}
-
     if not datos['tipos']:
         alertas.append(f"❌ No se encontraron tipos (BLOCK/MOTOR) en DNRPA {label}.")
-
     return datos, alertas
 
-
-# ─────────────────────────────────────────────
-# PARSEO FACTURA
-# ─────────────────────────────────────────────
+# ─── PARSEO FACTURA ───
 
 def parsear_facturas(textos):
     motores = []
@@ -243,10 +177,7 @@ def parsear_facturas(textos):
                         break
     return motores
 
-
-# ─────────────────────────────────────────────
-# GENERAR TXT
-# ─────────────────────────────────────────────
+# ─── GENERAR TXT ───
 
 def generar_txt(di, items_procesados, lcm_valor):
     try:
@@ -256,19 +187,15 @@ def generar_txt(di, items_procesados, lcm_valor):
     except:
         anio_dos = di.get('anio', '26')
         fecha_str = di.get('fecha_nac', '')
-
     nro_despacho = f"{di['nro_despacho']}/{anio_dos}"
     id_aduana = di.get('id_aduana', '001')
-
     if lcm_valor and lcm_valor.strip():
         parts = (re.split(r'[/\-\s]+', lcm_valor.strip()) + ["0","0","0"])[:3]
         lcm_tipo, lcm_nro, lcm_anio = parts
     else:
         lcm_tipo, lcm_nro, lcm_anio = "0", "0", "0"
-
     def q(v): return f'"{v}"'
     def safe(v): return str(v).strip().replace(" ", "") if v else ""
-
     caratula = ";".join([
         q(id_aduana), q(nro_despacho), q("00"), q("12"),
         q(di.get('cuit_importador','')), q("12"),
@@ -278,7 +205,6 @@ def generar_txt(di, items_procesados, lcm_valor):
         q(str(len(items_procesados))), q("N"), q("S"),
         q(""), q(""), q(""), q(""), q("")
     ])
-
     lineas = []
     for i, item in enumerate(items_procesados, start=1):
         dnrpa = item['dnrpa']
@@ -288,11 +214,9 @@ def generar_txt(di, items_procesados, lcm_valor):
         peso = dnrpa.get('tipos',{}).get(tipo_key,{}).get('peso','')
         nro_motor = safe(item.get('motor','')) if tipo == 'ENGINE' else ''
         anio = str(item['anio_fab'])
-
         linea = ";".join([
             q(id_aduana), q(nro_despacho), q("00"), q(str(i)),
-            q(dnrpa.get('id_marca','')), q(id_tipo),
-            q(dnrpa.get('id_modelo','')),
+            q(dnrpa.get('id_marca','')), q(id_tipo), q(dnrpa.get('id_modelo','')),
             q(lcm_tipo), q(lcm_nro), q(lcm_anio),
             q(anio), q(anio),
             q(dnrpa.get('id_marca','')), q(nro_motor),
@@ -300,23 +224,17 @@ def generar_txt(di, items_procesados, lcm_valor):
             q(di.get('pais_procedencia','212')), q(str(peso)), q("N")
         ])
         lineas.append(linea)
-
     return caratula + "\n" + "\n".join(lineas)
 
-
-# ─────────────────────────────────────────────
-# GENERAR EXCEL
-# ─────────────────────────────────────────────
+# ─── GENERAR EXCEL ───
 
 def generar_excel(di, items_procesados, lcm_valor):
     wb = openpyxl.load_workbook(TEMPLATE_PATH)
     ws = wb['ANVERSO']
-
     try:
         fecha_dt = datetime.datetime.strptime(di['fecha_nac'], "%d/%m/%Y")
     except:
         fecha_dt = datetime.datetime.now()
-
     ws['E3'] = di['nro_despacho']
     ws['J3'] = fecha_dt
     ws['L3'] = di.get('regimen', '20')
@@ -324,17 +242,12 @@ def generar_excel(di, items_procesados, lcm_valor):
     ws['L7'] = di.get('cuit_importador', '')
     ws['I9'] = di.get('importador', '')
     ws['L9'] = di.get('cuit_comprador', '')
-    try:
-        ws['E11'] = int(di.get('pais_procedencia', 212))
-    except:
-        ws['E11'] = di.get('pais_procedencia', 212)
-
+    try: ws['E11'] = int(di.get('pais_procedencia', 212))
+    except: ws['E11'] = di.get('pais_procedencia', 212)
     for row_idx in range(16, 31):
         for col_idx in range(1, 14):
             ws.cell(row=row_idx, column=col_idx).value = None
-
     lcm_excel = lcm_valor.strip() if lcm_valor and lcm_valor.strip() else 'XXX'
-
     for i, item in enumerate(items_procesados):
         row = 16 + i
         dnrpa = item['dnrpa']
@@ -344,7 +257,6 @@ def generar_excel(di, items_procesados, lcm_valor):
         peso = dnrpa.get('tipos',{}).get(tipo_key,{}).get('peso','')
         nro_motor = item.get('motor','') if tipo == 'ENGINE' else ''
         anio = str(item['anio_fab'])
-
         ws.cell(row=row, column=1).value = i + 1
         ws.cell(row=row, column=2).value = dnrpa.get('id_marca','')
         ws.cell(row=row, column=3).value = id_tipo
@@ -358,18 +270,16 @@ def generar_excel(di, items_procesados, lcm_valor):
         ws.cell(row=row, column=11).value = 'NO POSEE'
         ws.cell(row=row, column=12).value = di.get('pais_procedencia','212')
         ws.cell(row=row, column=13).value = str(peso)
-
     buf = BytesIO()
     wb.save(buf)
     buf.seek(0)
     return buf
 
-
-# ─────────────────────────────────────────────
+# ═══════════════════════════════════════════════
 # INTERFAZ
-# ─────────────────────────────────────────────
+# ═══════════════════════════════════════════════
 
-# ── SECCIÓN 1 ──
+# ── SECCIÓN 1: DOCUMENTOS GENERALES ──
 st.markdown('<p class="section-title">1 · Documentos generales</p>', unsafe_allow_html=True)
 col1, col2 = st.columns(2)
 with col1:
@@ -377,49 +287,45 @@ with col1:
 with col2:
     fc_files = st.file_uploader("🧾 Factura/s (PDF)", type="pdf", accept_multiple_files=True)
 
-# ── SECCIÓN 2 ──
+# ── SECCIÓN 2: ÍTEMS ──
 st.markdown('<p class="section-title">2 · Ítems de la DJIM</p>', unsafe_allow_html=True)
 st.caption("Agregá un ítem por cada motor o block del despacho.")
 
-st.button("➕ Agregar ítem", on_click=agregar_item)
+col_add, col_rem = st.columns([1, 1])
+with col_add:
+    if st.button("➕ Agregar ítem"):
+        st.session_state.n_items += 1
+with col_rem:
+    if st.session_state.n_items > 0:
+        if st.button("➖ Quitar último"):
+            st.session_state.n_items -= 1
 
-for idx in range(len(st.session_state.items)):
-    item = st.session_state.items[idx]
-    st.markdown(f"""
-    <div style="background:#1a1f2e;border:1px solid #2d3561;border-left:4px solid #4f8ef7;
-    border-radius:10px;padding:1rem 1.2rem;margin-bottom:0.8rem;">
-    <span style="color:#7b8db0;font-size:0.8rem;font-family:'IBM Plex Mono',monospace;">
-    ÍTEM {idx+1}</span></div>
-    """, unsafe_allow_html=True)
+# Renderizar ítems usando n_items (número fijo, sin lista dinámica)
+tipos_seleccionados = []
+dnrpa_files = []
+anios_block = []
 
-    col1, col2, col3 = st.columns([2, 3, 1])
+for idx in range(st.session_state.n_items):
+    st.markdown(f"**Ítem {idx+1}**")
+    col1, col2 = st.columns([1, 2])
     with col1:
         tipo = st.selectbox(
-            f"Tipo · ítem {idx+1}",
+            "Tipo",
             ["ENGINE", "BLOCK"],
-            key=f"tipo_{idx}",
-            index=0 if item.get('tipo','ENGINE') == 'ENGINE' else 1
+            key=f"tipo_sel_{idx}"
         )
-        st.session_state.items[idx]['tipo'] = tipo
+        tipos_seleccionados.append(tipo)
+        if tipo == "BLOCK":
+            anio = st.text_input("Año fabricación", key=f"anio_sel_{idx}", placeholder="ej: 2025")
+            anios_block.append(anio)
+        else:
+            anios_block.append("")
     with col2:
-        dnrpa = st.file_uploader(f"DNRPA PDF · ítem {idx+1}", type="pdf", key=f"dnrpa_{idx}")
-        st.session_state.items[idx]['dnrpa_file'] = dnrpa
-    with col3:
-        st.markdown("<br><br>", unsafe_allow_html=True)
-        st.button("🗑️", key=f"remove_{idx}", on_click=eliminar_item, args=(idx,))
+        dnrpa = st.file_uploader(f"DNRPA PDF", type="pdf", key=f"dnrpa_sel_{idx}")
+        dnrpa_files.append(dnrpa)
+    st.divider()
 
-    if tipo == 'BLOCK':
-        anio = st.text_input(
-            f"Año fabricación · ítem {idx+1}",
-            value=item.get('anio_fab_manual',''),
-            key=f"anio_{idx}",
-            placeholder="ej: 2025"
-        )
-        st.session_state.items[idx]['anio_fab_manual'] = anio
-
-    st.markdown("---")
-
-# ── SECCIÓN 3 ──
+# ── SECCIÓN 3: DATOS ADICIONALES ──
 st.markdown('<p class="section-title">3 · Datos adicionales</p>', unsafe_allow_html=True)
 col1, col2 = st.columns(2)
 with col1:
@@ -441,12 +347,12 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
         errores.append("❌ Faltá subir el DI.")
     if not fc_files:
         errores.append("❌ Faltá subir al menos una factura.")
-    if not st.session_state.items:
+    if st.session_state.n_items == 0:
         errores.append("❌ Agregá al menos un ítem.")
-    for idx, item in enumerate(st.session_state.items):
-        if not item.get('dnrpa_file'):
+    for idx in range(st.session_state.n_items):
+        if not dnrpa_files[idx]:
             errores.append(f"❌ Faltá el DNRPA del ítem {idx+1}.")
-        if item.get('tipo') == 'BLOCK' and not item.get('anio_fab_manual','').strip():
+        if tipos_seleccionados[idx] == 'BLOCK' and not anios_block[idx].strip():
             errores.append(f"❌ Ingresá el año de fabricación del ítem {idx+1} (BLOCK).")
 
     if errores:
@@ -464,26 +370,26 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
         fc_textos = [get_text(f.read(), f"fc_{i}") for i, f in enumerate(fc_files)]
         motores_factura = parsear_facturas(fc_textos)
 
-        n_engines = sum(1 for it in st.session_state.items if it.get('tipo') == 'ENGINE')
+        n_engines = sum(1 for t in tipos_seleccionados if t == 'ENGINE')
         items_procesados = []
         todas_alertas = di_alertas.copy()
         motor_idx = 0
 
-        for idx, item in enumerate(st.session_state.items):
-            dnrpa_bytes = item['dnrpa_file'].read()
+        for idx in range(st.session_state.n_items):
+            tipo = tipos_seleccionados[idx]
+            tipo_key = 'MOTOR' if tipo == 'ENGINE' else 'BLOCK'
+
+            dnrpa_bytes = dnrpa_files[idx].read()
             dnrpa_text = get_text(dnrpa_bytes, f"dnrpa_{idx}")
             dnrpa_datos, dnrpa_alertas = parsear_dnrpa(dnrpa_text, f"ítem {idx+1}")
             todas_alertas.extend(dnrpa_alertas)
-
-            tipo = item.get('tipo', 'ENGINE')
-            tipo_key = 'MOTOR' if tipo == 'ENGINE' else 'BLOCK'
 
             if tipo == 'ENGINE':
                 anio_fab = di_datos.get('anio_fab_di', '')
                 if not anio_fab:
                     todas_alertas.append(f"❌ No se encontró año de fabricación en el DI para ENGINE ítem {idx+1}.")
             else:
-                anio_fab = item.get('anio_fab_manual', '')
+                anio_fab = anios_block[idx]
 
             motor = ''
             if tipo == 'ENGINE':
