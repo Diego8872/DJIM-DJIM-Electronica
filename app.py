@@ -177,9 +177,8 @@ def parsear_di(text):
     if not datos['pais_fabricacion']:
         alertas.append("⚠️ No se encontró país de fabricación en el DI.")
 
-    # Régimen
-    m = re.search(r'REGIMEN[^0-9]*(\d{1,3})', text, re.IGNORECASE)
-    datos['regimen'] = m.group(1) if m else '20'
+    # Régimen: siempre 20 para importación
+    datos['regimen'] = '20'
 
     # Año fabricación ENGINE: ZA(XXXXXX)
     m = re.search(r'ZA\(0*(\d{4})\)', text)
