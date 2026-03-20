@@ -14,17 +14,10 @@ st.set_page_config(page_title="DJIM / DJIM Electrónica", page_icon="📄", layo
 # ─────────────────────────────────────────────
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
 
-html, body, [class*="css"] {
-    font-family: 'IBM Plex Sans', sans-serif;
-    background-color: #0f1117;
-    color: #e2e8f0;
-}
-
-.main { background-color: #0f1117; }
+html, body, [class*="css"] { font-family: 'IBM Plex Sans', sans-serif; }
 .main > div { padding-top: 1rem; }
-section[data-testid="stSidebar"] { background-color: #1a1f2e; }
 
 .djim-header {
     background: linear-gradient(135deg, #1e2440 0%, #2a3060 100%);
@@ -32,7 +25,6 @@ section[data-testid="stSidebar"] { background-color: #1a1f2e; }
     padding: 1.8rem 2.5rem;
     margin-bottom: 1.5rem;
     border-left: 5px solid #4f8ef7;
-    border: 1px solid #2d3561;
 }
 .djim-header h1 { color: #fff; font-size: 1.7rem; font-weight: 600; margin: 0 0 0.3rem 0; }
 .djim-header p { color: #7b8db0; font-size: 0.85rem; margin: 0; font-family: 'IBM Plex Mono', monospace; }
@@ -45,82 +37,20 @@ section[data-testid="stSidebar"] { background-color: #1a1f2e; }
     color: #4f8ef7;
     margin: 2rem 0 0.8rem 0;
     padding-bottom: 0.5rem;
-    border-bottom: 1px solid #1e2440;
+    border-bottom: 1px solid #e0e8f0;
 }
-
-/* Inputs dark */
-div[data-testid="stFileUploader"] {
-    background: #1a1f2e;
-    border-radius: 10px;
-    border: 1px dashed #2d3561;
-    padding: 0.5rem;
-}
-div[data-testid="stFileUploader"] label { color: #a0aec0 !important; }
-div[data-testid="stTextInput"] input {
-    background: #1a1f2e !important;
-    border: 1px solid #2d3561 !important;
-    color: #e2e8f0 !important;
-    border-radius: 8px !important;
-}
-div[data-testid="stSelectbox"] div[data-baseweb="select"] {
-    background: #1a1f2e !important;
-    border: 1px solid #2d3561 !important;
-    border-radius: 8px !important;
-}
-
-/* Container de ítems */
-div[data-testid="stVerticalBlockBorderWrapper"] {
-    background: #1a1f2e !important;
-    border: 1px solid #2d3561 !important;
-    border-left: 4px solid #4f8ef7 !important;
-    border-radius: 10px !important;
-}
-
-/* Botones */
-.stButton > button {
-    background: #1e2440 !important;
-    color: #e2e8f0 !important;
-    border: 1px solid #2d3561 !important;
-    border-radius: 8px !important;
-    font-family: 'IBM Plex Sans', sans-serif !important;
-    font-weight: 500 !important;
-}
-.stButton > button:hover {
-    background: #2d3561 !important;
-    border-color: #4f8ef7 !important;
-}
-button[kind="primary"] {
-    background: #4f8ef7 !important;
-    color: #fff !important;
-    border: none !important;
-}
-button[kind="primary"]:hover { background: #3a7ae8 !important; }
-
-/* Download buttons */
-div[data-testid="stDownloadButton"] > button {
-    background: #4f8ef7 !important;
-    color: white !important;
-    border: none !important;
-    border-radius: 8px !important;
-    font-weight: 500 !important;
-}
-div[data-testid="stDownloadButton"] > button:hover { background: #3a7ae8 !important; }
-
-/* Radio */
-div[data-testid="stRadio"] label { color: #a0aec0 !important; }
 
 .alerta-ok {
-    background: #0d2d1a;
-    border: 1px solid #276749;
+    background: #e8f5e9;
+    border: 1px solid #a5d6a7;
     border-radius: 8px;
     padding: 0.8rem 1.2rem;
-    color: #68d391;
+    color: #2e7d32;
     font-weight: 500;
     font-size: 0.9rem;
     margin: 0.5rem 0;
 }
 
-/* Ocultar github toolbar */
 #GithubIcon { visibility: hidden; }
 header[data-testid="stHeader"] { background: transparent; }
 </style>
