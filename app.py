@@ -8,7 +8,132 @@ import datetime
 from io import BytesIO
 
 st.set_page_config(page_title="DJIM / DJIM Electrónica", page_icon="📄", layout="centered")
-st.title("📄 Generador DJIM / DJIM Electrónica")
+
+# ─────────────────────────────────────────────
+# CSS
+# ─────────────────────────────────────────────
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+html, body, [class*="css"] {
+    font-family: 'IBM Plex Sans', sans-serif;
+}
+
+.main > div { padding-top: 1.5rem; }
+
+/* Header */
+.djim-header {
+    background: linear-gradient(135deg, #1a1f36 0%, #2d3561 100%);
+    border-radius: 12px;
+    padding: 2rem 2.5rem;
+    margin-bottom: 2rem;
+    border-left: 5px solid #4f8ef7;
+}
+.djim-header h1 {
+    color: #ffffff;
+    font-size: 1.8rem;
+    font-weight: 600;
+    margin: 0 0 0.3rem 0;
+    letter-spacing: -0.3px;
+}
+.djim-header p {
+    color: #8b9bbf;
+    font-size: 0.9rem;
+    margin: 0;
+    font-family: 'IBM Plex Mono', monospace;
+}
+
+/* Sección */
+.section-title {
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: #4f8ef7;
+    margin: 1.8rem 0 0.8rem 0;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid #e8edf5;
+}
+
+/* Item card */
+.item-card {
+    background: #f8faff;
+    border: 1px solid #dde4f0;
+    border-radius: 10px;
+    padding: 1.2rem 1.5rem;
+    margin-bottom: 1rem;
+    border-left: 4px solid #4f8ef7;
+}
+
+/* Badge tipo */
+.badge-engine {
+    background: #e8f0fe;
+    color: #2d5be3;
+    padding: 2px 10px;
+    border-radius: 20px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    font-family: 'IBM Plex Mono', monospace;
+}
+.badge-block {
+    background: #fef3e2;
+    color: #c07600;
+    padding: 2px 10px;
+    border-radius: 20px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    font-family: 'IBM Plex Mono', monospace;
+}
+
+/* Botón agregar */
+.stButton > button {
+    border-radius: 8px;
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-weight: 500;
+    font-size: 0.875rem;
+}
+
+/* Download buttons */
+div[data-testid="stDownloadButton"] > button {
+    background: #1a1f36 !important;
+    color: white !important;
+    border: none !important;
+    border-radius: 8px !important;
+    font-weight: 500 !important;
+    padding: 0.6rem 1.2rem !important;
+}
+div[data-testid="stDownloadButton"] > button:hover {
+    background: #2d3561 !important;
+}
+
+/* JSON expander */
+.stJson { font-family: 'IBM Plex Mono', monospace; font-size: 0.8rem; }
+
+/* Alerta custom */
+.alerta-ok {
+    background: #e8f5e9;
+    border: 1px solid #a5d6a7;
+    border-radius: 8px;
+    padding: 0.8rem 1.2rem;
+    color: #2e7d32;
+    font-weight: 500;
+    font-size: 0.9rem;
+}
+
+/* Ocultar toolbar github */
+#GithubIcon { visibility: hidden; }
+header[data-testid="stHeader"] { background: transparent; }
+</style>
+""", unsafe_allow_html=True)
+
+# Header
+st.markdown("""
+<div class="djim-header">
+    <h1>📄 DJIM / DJIM Electrónica</h1>
+    <p>Generador automático · Interlog Grupo 8</p>
+</div>
+""", unsafe_allow_html=True)
 
 TEMPLATE_PATH = "template_djim.xlsx"
 
@@ -62,7 +187,6 @@ def parsear_di(text):
     datos = {}
     alertas = []
 
-    # Nro despacho y aduana: "25 001 IC04 258207 S"
     m = re.search(r'\b(\d{2})\s+(\d{3})\s+([A-Z]{2}\d{2})\s+(\d+)\s+([A-Z])\b', text)
     if m:
         anio, aduana, tipo, nro, dc = m.groups()
@@ -75,7 +199,6 @@ def parsear_di(text):
         datos['anio'] = ''
         datos['id_aduana'] = ''
 
-    # Fecha oficialización
     fechas = re.findall(r'\b(\d{2}/\d{2}/\d{4})\b', text)
     if fechas:
         datos['fecha_nac'] = fechas[0]
@@ -83,7 +206,6 @@ def parsear_di(text):
         alertas.append("❌ No se encontró fecha de oficialización en el DI.")
         datos['fecha_nac'] = ''
 
-    # CUITs
     cuits = re.findall(r'\b(\d{2}-\d{8}-\d{1})\b', text)
     if len(cuits) >= 1:
         datos['cuit_importador'] = cuits[0]
@@ -99,11 +221,9 @@ def parsear_di(text):
         alertas.append("⚠️ No se encontró CUIT del despachante. Se usará el valor por defecto.")
         datos['cuit_despachante'] = '20-22824212-9'
 
-    # Importador
     m = re.search(r'(FINNING\s+\S+(?:\s+\S+){1,3})', text)
     datos['importador'] = m.group(1).strip() if m else 'FINNING SOLUCIONES MINERAS SA'
 
-    # País procedencia
     PAISES = {
         'ESTADOS UNIDOS': '212', 'JAPON': '119', 'ALEMANIA': '101',
         'BRASIL': '023', 'CHINA': '156', 'REINO UNIDO': '826',
@@ -115,13 +235,11 @@ def parsear_di(text):
             datos['pais_procedencia'] = codigo
             break
     if not datos['pais_procedencia']:
-        alertas.append("⚠️ No se encontró país de procedencia en el DI. Ingresá el código manualmente.")
+        alertas.append("⚠️ No se encontró país de procedencia. Ingresá el código manualmente.")
 
-    # Régimen
     m = re.search(r'REGIMEN[^0-9]*(\d{1,3})', text, re.IGNORECASE)
     datos['regimen'] = m.group(1) if m else '20'
 
-    # Año fabricación ENGINE: ZA(XXXXXX)
     m = re.search(r'ZA\(0*(\d{4})\)', text)
     datos['anio_fab_di'] = m.group(1) if m else ''
 
@@ -312,66 +430,95 @@ def generar_excel(di, items_procesados, lcm_valor):
 # INTERFAZ
 # ─────────────────────────────────────────────
 
+# Inicializar session state
 if 'items' not in st.session_state:
     st.session_state.items = []
+if 'remove_idx' not in st.session_state:
+    st.session_state.remove_idx = None
 
-st.markdown("### 1. Documentos generales")
+# Procesar eliminación pendiente
+if st.session_state.remove_idx is not None:
+    idx = st.session_state.remove_idx
+    if 0 <= idx < len(st.session_state.items):
+        st.session_state.items.pop(idx)
+    st.session_state.remove_idx = None
+
+# ── SECCIÓN 1: DOCUMENTOS GENERALES ──
+st.markdown('<p class="section-title">1 · Documentos generales</p>', unsafe_allow_html=True)
 col1, col2 = st.columns(2)
 with col1:
     di_file = st.file_uploader("📋 DI (PDF)", type="pdf")
 with col2:
     fc_files = st.file_uploader("🧾 Factura/s (PDF)", type="pdf", accept_multiple_files=True)
 
-st.markdown("### 2. Ítems de la DJIM")
+# ── SECCIÓN 2: ÍTEMS ──
+st.markdown('<p class="section-title">2 · Ítems de la DJIM</p>', unsafe_allow_html=True)
 st.caption("Agregá un ítem por cada motor o block del despacho.")
 
-if st.button("➕ Agregar ítem"):
-    st.session_state.items.append({'tipo': 'ENGINE', 'dnrpa_file': None, 'anio_fab_manual': ''})
+if st.button("➕ Agregar ítem", use_container_width=False):
+    st.session_state.items.append({
+        'tipo': 'ENGINE',
+        'dnrpa_file': None,
+        'anio_fab_manual': '',
+    })
+    st.rerun()
 
-items_to_remove = []
-for idx, item in enumerate(st.session_state.items):
+# Renderizar ítems
+for idx in range(len(st.session_state.items)):
+    item = st.session_state.items[idx]
     with st.container(border=True):
         col1, col2, col3 = st.columns([2, 3, 1])
         with col1:
             tipo = st.selectbox(
-                f"Tipo ítem {idx+1}", ["ENGINE", "BLOCK"],
+                f"Tipo · ítem {idx+1}",
+                ["ENGINE", "BLOCK"],
                 key=f"tipo_{idx}",
-                index=0 if item['tipo'] == 'ENGINE' else 1
+                index=0 if item.get('tipo', 'ENGINE') == 'ENGINE' else 1
             )
             st.session_state.items[idx]['tipo'] = tipo
         with col2:
-            dnrpa = st.file_uploader(f"DNRPA PDF - ítem {idx+1}", type="pdf", key=f"dnrpa_{idx}")
+            dnrpa = st.file_uploader(
+                f"DNRPA PDF · ítem {idx+1}",
+                type="pdf",
+                key=f"dnrpa_{idx}"
+            )
             st.session_state.items[idx]['dnrpa_file'] = dnrpa
         with col3:
             st.markdown("<br><br>", unsafe_allow_html=True)
-            if st.button("🗑️", key=f"remove_{idx}"):
-                items_to_remove.append(idx)
+            if st.button("🗑️", key=f"remove_{idx}", help="Eliminar ítem"):
+                st.session_state.remove_idx = idx
+                st.rerun()
+
         if tipo == 'BLOCK':
             anio = st.text_input(
-                f"Año fabricación ítem {idx+1}",
+                f"Año fabricación · ítem {idx+1}",
                 value=item.get('anio_fab_manual', ''),
-                key=f"anio_{idx}"
+                key=f"anio_{idx}",
+                placeholder="ej: 2025"
             )
             st.session_state.items[idx]['anio_fab_manual'] = anio
 
-for idx in sorted(items_to_remove, reverse=True):
-    st.session_state.items.pop(idx)
-
-st.markdown("### 3. Datos adicionales")
+# ── SECCIÓN 3: DATOS ADICIONALES ──
+st.markdown('<p class="section-title">3 · Datos adicionales</p>', unsafe_allow_html=True)
 col1, col2 = st.columns(2)
 with col1:
-    pais_fab_manual = st.text_input("Código país fabricación", value="212",
-                                     help="Solo si no se detecta automáticamente del DI")
-    tiene_lcm = st.radio("¿Tiene LCM?", ["No", "Sí"], horizontal=True)
+    pais_fab_manual = st.text_input(
+        "Código país fabricación",
+        value="212",
+        help="Solo si no se detecta automáticamente del DI"
+    )
 with col2:
+    tiene_lcm = st.radio("¿Tiene LCM?", ["No", "Sí"], horizontal=True)
     lcm_valor = ""
     if tiene_lcm == "Sí":
         lcm_valor = st.text_input("Número LCM", placeholder="ej: 39/12345/2025")
 
 st.markdown("---")
 
+# ── BOTÓN PRINCIPAL ──
 if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=True):
 
+    # Validaciones
     errores = []
     if not di_file:
         errores.append("❌ Faltá subir el DI.")
@@ -382,7 +529,7 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
     for idx, item in enumerate(st.session_state.items):
         if not item.get('dnrpa_file'):
             errores.append(f"❌ Faltá el DNRPA del ítem {idx+1}.")
-        if item['tipo'] == 'BLOCK' and not item.get('anio_fab_manual', '').strip():
+        if item.get('tipo') == 'BLOCK' and not item.get('anio_fab_manual', '').strip():
             errores.append(f"❌ Ingresá el año de fabricación del ítem {idx+1} (BLOCK).")
 
     if errores:
@@ -391,19 +538,23 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
         st.stop()
 
     with st.spinner("Procesando documentos..."):
+
+        # DI
         di_bytes = di_file.read()
         di_text = get_text(di_bytes, "di")
         di_datos, di_alertas = parsear_di(di_text)
         if not di_datos['pais_procedencia']:
             di_datos['pais_procedencia'] = pais_fab_manual
 
+        # Facturas
         fc_textos = []
         for i, fc_f in enumerate(fc_files):
             t = get_text(fc_f.read(), f"fc_{i}")
             fc_textos.append(t)
         motores_factura = parsear_facturas(fc_textos)
 
-        n_engines = sum(1 for it in st.session_state.items if it['tipo'] == 'ENGINE')
+        # Ítems
+        n_engines = sum(1 for it in st.session_state.items if it.get('tipo') == 'ENGINE')
         items_procesados = []
         todas_alertas = di_alertas.copy()
         motor_idx = 0
@@ -414,9 +565,10 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
             dnrpa_datos, dnrpa_alertas = parsear_dnrpa(dnrpa_text, label=f"ítem {idx+1}")
             todas_alertas.extend(dnrpa_alertas)
 
-            tipo = item['tipo']
+            tipo = item.get('tipo', 'ENGINE')
             tipo_key = 'MOTOR' if tipo == 'ENGINE' else 'BLOCK'
 
+            # Año fabricación
             if tipo == 'ENGINE':
                 anio_fab = di_datos.get('anio_fab_di', '')
                 if not anio_fab:
@@ -424,6 +576,7 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
             else:
                 anio_fab = item.get('anio_fab_manual', '')
 
+            # Motor
             motor = ''
             if tipo == 'ENGINE':
                 if motor_idx < len(motores_factura):
@@ -432,6 +585,7 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
                 else:
                     todas_alertas.append(f"❌ No se encontró UNIQUE ID para ENGINE ítem {idx+1} en la factura.")
 
+            # Peso
             if not dnrpa_datos.get('tipos', {}).get(tipo_key, {}).get('peso'):
                 todas_alertas.append(f"❌ No se encontró peso para {tipo} en DNRPA ítem {idx+1}.")
 
@@ -448,6 +602,7 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
                 f"solo {len(motores_factura)} UNIQUE ID(s) en la/s factura/s."
             )
 
+    # Mostrar alertas
     advertencias = [a for a in todas_alertas if a.startswith("⚠️")]
     errores_criticos = [a for a in todas_alertas if a.startswith("❌")]
 
@@ -459,13 +614,14 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
             st.error(e)
         st.stop()
 
-    st.success("✅ Documentos procesados correctamente.")
+    st.markdown('<div class="alerta-ok">✅ Documentos procesados correctamente.</div>', unsafe_allow_html=True)
+    st.markdown("")
 
     with st.expander("📋 Ver datos extraídos"):
         st.markdown("**DI:**")
         st.json({k: v for k, v in di_datos.items() if k != 'anio_fab_di'})
         for idx, item in enumerate(items_procesados):
-            st.markdown(f"**Ítem {idx+1} ({item['tipo']}):**")
+            st.markdown(f"**Ítem {idx+1} — {item['tipo']}:**")
             st.json({
                 'id_marca': item['dnrpa'].get('id_marca'),
                 'id_modelo': item['dnrpa'].get('id_modelo'),
@@ -474,26 +630,30 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
                 'motor': item.get('motor', ''),
             })
 
-    st.markdown("### 4. Descargar")
+    st.markdown('<p class="section-title">4 · Descargar</p>', unsafe_allow_html=True)
+
+    col1, col2 = st.columns(2)
 
     txt_content = generar_txt(di_datos, items_procesados, lcm_valor)
-    st.download_button(
-        "📥 Descargar DJIM Electrónica (.txt)",
-        data=txt_content.encode('utf-8'),
-        file_name="DJIM_ELECTRONICA.txt",
-        mime="text/plain",
-        use_container_width=True
-    )
-
-    if os.path.exists(TEMPLATE_PATH):
-        excel_buf = generar_excel(di_datos, items_procesados, lcm_valor)
-        nro = di_datos.get('nro_despacho', 'DJIM')
+    with col1:
         st.download_button(
-            "📥 Descargar DJIM Excel (.xlsx)",
-            data=excel_buf,
-            file_name=f"DJIM_{nro}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "📥 DJIM Electrónica (.txt)",
+            data=txt_content.encode('utf-8'),
+            file_name="DJIM_ELECTRONICA.txt",
+            mime="text/plain",
             use_container_width=True
         )
-    else:
-        st.warning("⚠️ Template Excel no encontrado en el repo.")
+
+    with col2:
+        if os.path.exists(TEMPLATE_PATH):
+            excel_buf = generar_excel(di_datos, items_procesados, lcm_valor)
+            nro = di_datos.get('nro_despacho', 'DJIM')
+            st.download_button(
+                "📥 DJIM Excel (.xlsx)",
+                data=excel_buf,
+                file_name=f"DJIM_{nro}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
+        else:
+            st.warning("⚠️ Template Excel no encontrado en el repo.")
