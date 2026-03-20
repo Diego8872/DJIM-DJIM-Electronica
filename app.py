@@ -229,13 +229,10 @@ def parsear_facturas(textos):
     motores = []
     lines = "\n".join(textos).split('\n')
     for i, line in enumerate(lines):
-        if 'ENGINE' in line.upper():
-            for j in range(1, 4):
-                if i + j < len(lines):
-                    uid = re.search(r'UNIQUE\s+ID[:\s]+(\S+)', lines[i+j], re.IGNORECASE)
-                    if uid:
-                        motores.append(uid.group(1))
-                        break
+        # Buscar UNIQUE ID directamente — puede estar antes o después de ENGINE
+        uid = re.search(r'UNIQUE\s+ID[:\s]+([A-Z0-9]+)', line, re.IGNORECASE)
+        if uid:
+            motores.append(uid.group(1))
     return motores
 
 
