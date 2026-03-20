@@ -455,31 +455,39 @@ st.button("➕ Agregar ítem", on_click=agregar_item)
 
 for idx in range(len(st.session_state.items)):
     item = st.session_state.items[idx]
-    with st.container(border=True):
-        col1, col2, col3 = st.columns([2, 3, 1])
-        with col1:
-            tipo = st.selectbox(
-                f"Tipo · ítem {idx+1}",
-                ["ENGINE", "BLOCK"],
-                key=f"tipo_{idx}",
-                index=0 if item.get('tipo','ENGINE') == 'ENGINE' else 1
-            )
-            st.session_state.items[idx]['tipo'] = tipo
-        with col2:
-            dnrpa = st.file_uploader(f"DNRPA PDF · ítem {idx+1}", type="pdf", key=f"dnrpa_{idx}")
-            st.session_state.items[idx]['dnrpa_file'] = dnrpa
-        with col3:
-            st.markdown("<br><br>", unsafe_allow_html=True)
-            st.button("🗑️", key=f"remove_{idx}", on_click=eliminar_item, args=(idx,))
+    st.markdown(f"""
+    <div style="background:#1a1f2e;border:1px solid #2d3561;border-left:4px solid #4f8ef7;
+    border-radius:10px;padding:1rem 1.2rem;margin-bottom:0.8rem;">
+    <span style="color:#7b8db0;font-size:0.8rem;font-family:'IBM Plex Mono',monospace;">
+    ÍTEM {idx+1}</span></div>
+    """, unsafe_allow_html=True)
 
-        if tipo == 'BLOCK':
-            anio = st.text_input(
-                f"Año fabricación · ítem {idx+1}",
-                value=item.get('anio_fab_manual',''),
-                key=f"anio_{idx}",
-                placeholder="ej: 2025"
-            )
-            st.session_state.items[idx]['anio_fab_manual'] = anio
+    col1, col2, col3 = st.columns([2, 3, 1])
+    with col1:
+        tipo = st.selectbox(
+            f"Tipo · ítem {idx+1}",
+            ["ENGINE", "BLOCK"],
+            key=f"tipo_{idx}",
+            index=0 if item.get('tipo','ENGINE') == 'ENGINE' else 1
+        )
+        st.session_state.items[idx]['tipo'] = tipo
+    with col2:
+        dnrpa = st.file_uploader(f"DNRPA PDF · ítem {idx+1}", type="pdf", key=f"dnrpa_{idx}")
+        st.session_state.items[idx]['dnrpa_file'] = dnrpa
+    with col3:
+        st.markdown("<br><br>", unsafe_allow_html=True)
+        st.button("🗑️", key=f"remove_{idx}", on_click=eliminar_item, args=(idx,))
+
+    if tipo == 'BLOCK':
+        anio = st.text_input(
+            f"Año fabricación · ítem {idx+1}",
+            value=item.get('anio_fab_manual',''),
+            key=f"anio_{idx}",
+            placeholder="ej: 2025"
+        )
+        st.session_state.items[idx]['anio_fab_manual'] = anio
+
+    st.markdown("---")
 
 # ── SECCIÓN 3 ──
 st.markdown('<p class="section-title">3 · Datos adicionales</p>', unsafe_allow_html=True)
