@@ -1,4 +1,5 @@
 import streamlit as st
+from paises import PAISES, nombre_a_codigo, codigo_a_nombre
 import pdfplumber
 import openpyxl
 import subprocess
@@ -114,18 +115,22 @@ def parsear_di(text):
         alertas.append("⚠️ No se encontró CUIT del despachante. Se usará el valor por defecto.")
     m = re.search(r'(FINNING\s+\S+(?:\s+\S+){1,3})', text)
     datos['importador'] = m.group(1).strip() if m else 'FINNING SOLUCIONES MINERAS SA'
-    PAISES = {
-        'ESTADOS UNIDOS': '212', 'JAPON': '119', 'ALEMANIA': '101',
-        'BRASIL': '023', 'CHINA': '156', 'REINO UNIDO': '826',
-        'SUIZA': '756', 'FRANCIA': '250', 'ITALIA': '380',
-    }
+    # País procedencia y país fabricación (origen)
     datos['pais_procedencia'] = ''
+    datos['pais_fabricacion'] = ''
+    text_upper = text.upper()
     for pais, codigo in PAISES.items():
-        if pais in text.upper():
-            datos['pais_procedencia'] = codigo
-            break
+        if pais in text_upper:
+            if not datos['pais_procedencia']:
+                datos['pais_procedencia'] = codigo
+            if not datos['pais_fabricacion']:
+                datos['pais_fabricacion'] = codigo
+            if datos['pais_procedencia'] and datos['pais_fabricacion']:
+                break
     if not datos['pais_procedencia']:
-        alertas.append("⚠️ No se encontró país de procedencia. Ingresá el código manualmente.")
+        alertas.append("⚠️ No se encontró país de procedencia en el DI.")
+    if not datos['pais_fabricacion']:
+        alertas.append("⚠️ No se encontró país de fabricación en el DI.")
     m = re.search(r'REGIMEN[^0-9]*(\d{1,3})', text, re.IGNORECASE)
     datos['regimen'] = m.group(1) if m else '20'
     m = re.search(r'ZA\(0*(\d{4})\)', text)
@@ -221,7 +226,7 @@ def generar_txt(di, items_procesados, lcm_valor):
             q(anio), q(anio),
             q(dnrpa.get('id_marca','')), q(nro_motor),
             q("000"), q("NOPOSEE"),
-            q(di.get('pais_procedencia','212')), q(str(peso)), q("N")
+            q(di.get('pais_fabricacion', di.get('pais_procedencia','212'))), q(str(peso)), q("N")
         ])
         lineas.append(linea)
     return caratula + "\n" + "\n".join(lineas)
@@ -268,7 +273,7 @@ def generar_excel(di, items_procesados, lcm_valor):
         ws.cell(row=row, column=9).value = nro_motor
         ws.cell(row=row, column=10).value = '000'
         ws.cell(row=row, column=11).value = 'NO POSEE'
-        ws.cell(row=row, column=12).value = di.get('pais_procedencia','212')
+        ws.cell(row=row, column=12).value = di.get('pais_fabricacion', di.get('pais_procedencia','212'))
         ws.cell(row=row, column=13).value = str(peso)
     buf = BytesIO()
     wb.save(buf)
@@ -329,8 +334,20 @@ for idx in range(st.session_state.n_items):
 st.markdown('<p class="section-title">3 · Datos adicionales</p>', unsafe_allow_html=True)
 col1, col2 = st.columns(2)
 with col1:
-    pais_fab_manual = st.text_input("Código país fabricación", value="212",
-                                     help="Solo si no se detecta automáticamente del DI")
+    from paises import PAISES
+    opciones_paises = {f"{v} - {k}": v for k, v in sorted(PAISES.items(), key=lambda x: x[0])}
+    lista_opciones = list(opciones_paises.keys())
+    idx_default = lista_opciones.index("212 - ESTADOS UNIDOS") if "212 - ESTADOS UNIDOS" in lista_opciones else 0
+    pais_proc_sel = st.selectbox("País de procedencia",
+                             options=lista_opciones,
+                             index=idx_default,
+                             help="Se detecta automáticamente del DI.")
+    pais_fab_sel = st.selectbox("País de fabricación (origen)",
+                             options=lista_opciones,
+                             index=idx_default,
+                             help="Se detecta automáticamente del DI.")
+    pais_fab_manual = opciones_paises[pais_proc_sel]
+    pais_origen_manual = opciones_paises[pais_fab_sel]
 with col2:
     tiene_lcm = st.radio("¿Tiene LCM?", ["No", "Sí"], horizontal=True)
     lcm_valor = ""
@@ -366,6 +383,10 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
         di_datos, di_alertas = parsear_di(di_text)
         if not di_datos['pais_procedencia']:
             di_datos['pais_procedencia'] = pais_fab_manual
+        if not di_datos.get('pais_fabricacion'):
+            di_datos['pais_fabricacion'] = pais_origen_manual
+        else:
+            di_datos['pais_fabricacion'] = pais_origen_manual
 
         fc_textos = [get_text(f.read(), f"fc_{i}") for i, f in enumerate(fc_files)]
         motores_factura = parsear_facturas(fc_textos)
