@@ -436,7 +436,7 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
 
         fc_textos = []
         for i, f in enumerate(fc_files):
-            t = get_text(f.read(), f"fc_{i}", dpi=150)
+            t = get_text(f.read(), f"fc_{i}", dpi=200)
             fc_textos.append(t)
         with st.expander("🔍 Debug factura"):
             texto_fc = "\n".join(fc_textos)
@@ -484,7 +484,7 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
                     motor = motores_factura[motor_idx]
                     motor_idx += 1
                 else:
-                    todas_alertas.append(f"❌ No se encontró UNIQUE ID para ENGINE ítem {idx+1}.")
+                    todas_alertas.append(f"⚠️ No se encontró UNIQUE ID para ENGINE ítem {idx+1}. El campo quedará vacío.")
 
             if not dnrpa_datos.get('tipos',{}).get(tipo_key,{}).get('peso'):
                 todas_alertas.append(f"❌ No se encontró peso para {tipo} en DNRPA ítem {idx+1}.")
@@ -496,8 +496,8 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
 
         if n_engines > len(motores_factura):
             todas_alertas.append(
-                f"❌ Se declararon {n_engines} ENGINE(s) pero se encontraron "
-                f"solo {len(motores_factura)} UNIQUE ID(s) en la/s factura/s."
+                f"⚠️ Se declararon {n_engines} ENGINE(s) pero se encontraron "
+                f"solo {len(motores_factura)} UNIQUE ID(s) en la/s factura/s. Verificar manualmente."
             )
 
     for a in [x for x in todas_alertas if x.startswith("⚠️")]:
