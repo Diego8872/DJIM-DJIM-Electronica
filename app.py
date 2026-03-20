@@ -503,20 +503,18 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
     for a in [x for x in todas_alertas if x.startswith("⚠️")]:
         st.warning(a)
 
-    errores_criticos = [x for x in todas_alertas if x.startswith("❌")]
-    if errores_criticos:
-        for e in errores_criticos:
-            st.error(e)
-        st.stop()
-
-    # Guardar en session_state para que persistan los botones de descarga
+    # Guardar en session_state SIEMPRE antes del stop
     st.session_state['resultado_txt'] = generar_txt(di_datos, items_procesados, lcm_valor)
     if os.path.exists(TEMPLATE_PATH):
         excel_buf = generar_excel(di_datos, items_procesados, lcm_valor)
         st.session_state['resultado_excel'] = excel_buf.read()
         st.session_state['resultado_nro'] = di_datos.get('nro_despacho', 'DJIM')
-    st.session_state['di_datos'] = di_datos
-    st.session_state['items_procesados'] = items_procesados
+
+    errores_criticos = [x for x in todas_alertas if x.startswith("❌")]
+    if errores_criticos:
+        for e in errores_criticos:
+            st.error(e)
+        st.stop()
 
     st.markdown('<div class="alerta-ok">✅ Documentos procesados correctamente.</div>',
                 unsafe_allow_html=True)
