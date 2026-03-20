@@ -115,18 +115,41 @@ def parsear_di(text):
         alertas.append("⚠️ No se encontró CUIT del despachante. Se usará el valor por defecto.")
     m = re.search(r'(FINNING\s+\S+(?:\s+\S+){1,3})', text)
     datos['importador'] = m.group(1).strip() if m else 'FINNING SOLUCIONES MINERAS SA'
-    # País procedencia y país fabricación (origen)
+    # País fabricación (Origen) y País procedencia
+    # En el DI aparecen en la misma línea: "ESTADOS UNIDOS    ESTADOS UNIDOS"
+    # después del label "Origen Pais / Provincia  Pais de Procedencia / Destino"
     datos['pais_procedencia'] = ''
     datos['pais_fabricacion'] = ''
-    text_upper = text.upper()
-    for pais, codigo in PAISES.items():
-        if pais in text_upper:
-            if not datos['pais_procedencia']:
-                datos['pais_procedencia'] = codigo
-            if not datos['pais_fabricacion']:
-                datos['pais_fabricacion'] = codigo
-            if datos['pais_procedencia'] and datos['pais_fabricacion']:
+
+    lines = text.upper().split('\n')
+    for i, line in enumerate(lines):
+        if 'ORIGEN' in line and 'PROCEDENCIA' in line:
+            # La siguiente línea tiene los valores
+            if i + 1 < len(lines):
+                val_line = lines[i + 1].strip()
+                # Buscar los dos países en esa línea
+                encontrados = []
+                for pais, codigo in PAISES.items():
+                    if pais in val_line and codigo not in encontrados:
+                        encontrados.append(codigo)
+                if len(encontrados) >= 2:
+                    datos['pais_fabricacion'] = encontrados[0]
+                    datos['pais_procedencia'] = encontrados[1]
+                elif len(encontrados) == 1:
+                    datos['pais_fabricacion'] = encontrados[0]
+                    datos['pais_procedencia'] = encontrados[0]
                 break
+
+    # Fallback: buscar en todo el texto
+    if not datos['pais_procedencia'] or not datos['pais_fabricacion']:
+        for pais, codigo in PAISES.items():
+            if pais in text.upper():
+                if not datos['pais_fabricacion']:
+                    datos['pais_fabricacion'] = codigo
+                if not datos['pais_procedencia']:
+                    datos['pais_procedencia'] = codigo
+                break
+
     if not datos['pais_procedencia']:
         alertas.append("⚠️ No se encontró país de procedencia en el DI.")
     if not datos['pais_fabricacion']:
@@ -334,20 +357,7 @@ for idx in range(st.session_state.n_items):
 st.markdown('<p class="section-title">3 · Datos adicionales</p>', unsafe_allow_html=True)
 col1, col2 = st.columns(2)
 with col1:
-    from paises import PAISES
-    opciones_paises = {f"{v} - {k}": v for k, v in sorted(PAISES.items(), key=lambda x: x[0])}
-    lista_opciones = list(opciones_paises.keys())
-    idx_default = lista_opciones.index("212 - ESTADOS UNIDOS") if "212 - ESTADOS UNIDOS" in lista_opciones else 0
-    pais_proc_sel = st.selectbox("País de procedencia",
-                             options=lista_opciones,
-                             index=idx_default,
-                             help="Se detecta automáticamente del DI.")
-    pais_fab_sel = st.selectbox("País de fabricación (origen)",
-                             options=lista_opciones,
-                             index=idx_default,
-                             help="Se detecta automáticamente del DI.")
-    pais_fab_manual = opciones_paises[pais_proc_sel]
-    pais_origen_manual = opciones_paises[pais_fab_sel]
+    st.caption("🌍 País de procedencia y fabricación se detectan automáticamente del DI.")
 with col2:
     tiene_lcm = st.radio("¿Tiene LCM?", ["No", "Sí"], horizontal=True)
     lcm_valor = ""
@@ -381,12 +391,11 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
         di_bytes = di_file.read()
         di_text = get_text(di_bytes, "di")
         di_datos, di_alertas = parsear_di(di_text)
-        if not di_datos['pais_procedencia']:
-            di_datos['pais_procedencia'] = pais_fab_manual
+        # Fallback si no se detectó del DI
+        if not di_datos.get('pais_procedencia'):
+            di_datos['pais_procedencia'] = '212'
         if not di_datos.get('pais_fabricacion'):
-            di_datos['pais_fabricacion'] = pais_origen_manual
-        else:
-            di_datos['pais_fabricacion'] = pais_origen_manual
+            di_datos['pais_fabricacion'] = di_datos['pais_procedencia']
 
         fc_textos = [get_text(f.read(), f"fc_{i}") for i, f in enumerate(fc_files)]
         motores_factura = parsear_facturas(fc_textos)
