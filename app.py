@@ -509,6 +509,15 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
             st.error(e)
         st.stop()
 
+    # Guardar en session_state para que persistan los botones de descarga
+    st.session_state['resultado_txt'] = generar_txt(di_datos, items_procesados, lcm_valor)
+    if os.path.exists(TEMPLATE_PATH):
+        excel_buf = generar_excel(di_datos, items_procesados, lcm_valor)
+        st.session_state['resultado_excel'] = excel_buf.read()
+        st.session_state['resultado_nro'] = di_datos.get('nro_despacho', 'DJIM')
+    st.session_state['di_datos'] = di_datos
+    st.session_state['items_procesados'] = items_procesados
+
     st.markdown('<div class="alerta-ok">✅ Documentos procesados correctamente.</div>',
                 unsafe_allow_html=True)
     st.markdown("")
@@ -525,29 +534,3 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
                 'anio_fab': item['anio_fab'],
                 'motor': item.get('motor',''),
             })
-
-    st.markdown('<p class="section-title">4 · Descargar</p>', unsafe_allow_html=True)
-    col1, col2 = st.columns(2)
-
-    txt_content = generar_txt(di_datos, items_procesados, lcm_valor)
-    with col1:
-        st.download_button(
-            "📥 DJIM Electrónica (.txt)",
-            data=txt_content.encode('utf-8'),
-            file_name="DJIM_ELECTRONICA.txt",
-            mime="text/plain",
-            use_container_width=True
-        )
-    with col2:
-        if os.path.exists(TEMPLATE_PATH):
-            excel_buf = generar_excel(di_datos, items_procesados, lcm_valor)
-            nro = di_datos.get('nro_despacho', 'DJIM')
-            st.download_button(
-                "📥 DJIM Excel (.xlsx)",
-                data=excel_buf,
-                file_name=f"DJIM_{nro}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
-            )
-        else:
-            st.warning("⚠️ Template Excel no encontrado en el repo.")
