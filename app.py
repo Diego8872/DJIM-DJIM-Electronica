@@ -78,7 +78,11 @@ def ocr_pdf_bytes(pdf_bytes, label, dpi=150):
 
 def get_text(pdf_bytes, label, dpi=250):
     text = extract_text_pdfplumber(pdf_bytes)
-    if not text:
+    # Verificar que el texto tenga datos reales (no solo labels del formulario)
+    # Si no tiene números de CUIT o fechas, probablemente solo tiene el template vacío
+    import re as _re
+    tiene_datos = bool(_re.search(r'\d{2}-\d{8}-\d', text) or _re.search(r'\d{2}/\d{2}/\d{4}', text))
+    if not text or not tiene_datos:
         text = ocr_pdf_bytes(pdf_bytes, label, dpi=dpi)
     return text
 
