@@ -438,7 +438,12 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
         di_text = get_text(di_bytes, "di", dpi=250)
         di_datos, di_alertas = parsear_di(di_text)
 
-        fc_textos = [get_text(f.read(), f"fc_{i}", dpi=150) for i, f in enumerate(fc_files)]
+        fc_textos = []
+        for i, f in enumerate(fc_files):
+            t = get_text(f.read(), f"fc_{i}", dpi=150)
+            fc_textos.append(t)
+        with st.expander("🔍 Debug factura (primeros 2000 chars)"):
+            st.code(fc_textos[0][:2000] if fc_textos else "VACÍO")
         motores_factura = parsear_facturas(fc_textos)
 
         n_engines = sum(1 for t in tipos_seleccionados if t == 'ENGINE')
