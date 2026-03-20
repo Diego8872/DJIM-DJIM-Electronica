@@ -1,5 +1,4 @@
 import streamlit as st
-from paises import PAISES, nombre_a_codigo, codigo_a_nombre
 import pdfplumber
 import openpyxl
 import subprocess
@@ -43,7 +42,7 @@ st.markdown("""
 
 TEMPLATE_PATH = "template_djim.xlsx"
 
-# ─── INICIALIZAR SESSION STATE ───
+# ─── SESSION STATE ───
 if "n_items" not in st.session_state:
     st.session_state.n_items = 0
 
@@ -61,37 +60,53 @@ def extract_text_pdfplumber(pdf_bytes):
         pass
     return text.strip()
 
-def ocr_pdf_bytes(pdf_bytes, label, dpi=150):
+
+def ocr_pdf_bytes(pdf_bytes, label, dpi=250):
     tmp_pdf = f"/tmp/{label}.pdf"
     with open(tmp_pdf, "wb") as f:
         f.write(pdf_bytes)
-    subprocess.run(["pdftoppm", "-r", str(dpi), tmp_pdf, f"/tmp/ocr_{label}"], capture_output=True)
+    subprocess.run(["pdftoppm", "-r", str(dpi), tmp_pdf, f"/tmp/ocr_{label}"],
+                   capture_output=True)
     images = sorted([x for x in os.listdir("/tmp") if x.startswith(f"ocr_{label}")])
     text = ""
     for img in images:
-        result = subprocess.run(["tesseract", f"/tmp/{img}", "stdout"], capture_output=True, text=True)
+        result = subprocess.run(["tesseract", f"/tmp/{img}", "stdout"],
+                                capture_output=True, text=True)
         text += result.stdout
     for img in images:
-        try: os.remove(f"/tmp/{img}")
-        except: pass
+        try:
+            os.remove(f"/tmp/{img}")
+        except:
+            pass
     return text
+
 
 def get_text(pdf_bytes, label, dpi=250):
     text = extract_text_pdfplumber(pdf_bytes)
-    # Verificar que el texto tenga datos reales (no solo labels del formulario)
-    # Si no tiene números de CUIT o fechas, probablemente solo tiene el template vacío
-    import re as _re
-    tiene_datos = bool(_re.search(r'\d{2}-\d{8}-\d', text) or _re.search(r'\d{2}/\d{2}/\d{4}', text))
+    # Si pdfplumber no extrajo datos reales (solo labels del formulario), usar OCR
+    tiene_datos = bool(
+        re.search(r'\d{2}-\d{8}-\d', text) or
+        re.search(r'\d{2}/\d{2}/\d{4}', text)
+    )
     if not text or not tiene_datos:
         text = ocr_pdf_bytes(pdf_bytes, label, dpi=dpi)
     return text
 
+
 # ─── PARSEO DI ───
 
 def parsear_di(text):
+    from paises import PAISES
     datos = {}
     alertas = []
-    m = re.search(r'\b(\d{2})\s+(\d{3})\s+([A-Z]{2}\d{2})\s+(\d+)\s+([A-Z])\b', text)
+
+    # Normalizar texto: OCR confunde I con 1 en "IC04" → "1C04"
+    text_norm = re.sub(r'(?<!\d)1([CcGg])(\d{2})', r'I\1\2', text)
+    text_norm_upper = text_norm.upper()
+
+    # Nro despacho: "26 001 IC04 039364 U"
+    m = re.search(r'(\d{2})\s+(\d{3})\s+((?:IC|IG)\d{2})\s+(\d+)\s+([A-Z])\b',
+                  text_norm_upper)
     if m:
         anio, aduana, tipo, nro, dc = m.groups()
         datos['nro_despacho'] = f"{tipo}{nro}{dc}"
@@ -102,11 +117,15 @@ def parsear_di(text):
         datos['nro_despacho'] = ''
         datos['anio'] = ''
         datos['id_aduana'] = ''
+
+    # Fecha oficialización
     fechas = re.findall(r'\b(\d{2}/\d{2}/\d{4})\b', text)
     datos['fecha_nac'] = fechas[0] if fechas else ''
     if not fechas:
         alertas.append("❌ No se encontró fecha de oficialización en el DI.")
-    cuits = re.findall(r'\b(\d{2}-\d{8}-\d{1})\b', text)
+
+    # CUITs
+    cuits = re.findall(r'\b(\d{2}-\d{8}-\d)\b', text)
     if cuits:
         datos['cuit_importador'] = cuits[0]
         datos['cuit_comprador'] = cuits[0]
@@ -114,24 +133,24 @@ def parsear_di(text):
         alertas.append("❌ No se encontró CUIT del importador en el DI.")
         datos['cuit_importador'] = ''
         datos['cuit_comprador'] = ''
+
     datos['cuit_despachante'] = cuits[1] if len(cuits) >= 2 else '20-22824212-9'
     if len(cuits) < 2:
         alertas.append("⚠️ No se encontró CUIT del despachante. Se usará el valor por defecto.")
-    m = re.search(r'(FINNING\s+\S+(?:\s+\S+){1,3})', text)
+
+    # Importador
+    m = re.search(r'(FINNING\s+\S+(?:\s+\S+){1,3})', text.upper())
     datos['importador'] = m.group(1).strip() if m else 'FINNING SOLUCIONES MINERAS SA'
+
     # País fabricación (Origen) y País procedencia
-    # En el DI aparecen en la misma línea: "ESTADOS UNIDOS    ESTADOS UNIDOS"
-    # después del label "Origen Pais / Provincia  Pais de Procedencia / Destino"
+    # En el DI: línea con "ORIGEN PAIS" seguida de los valores
     datos['pais_procedencia'] = ''
     datos['pais_fabricacion'] = ''
-
-    lines = text.upper().split('\n')
+    lines = text_norm_upper.split('\n')
     for i, line in enumerate(lines):
-        if 'ORIGEN' in line and 'PROCEDENCIA' in line:
-            # La siguiente línea tiene los valores
+        if 'ORIGEN' in line and ('PROCEDENCIA' in line or 'PAIS' in line):
             if i + 1 < len(lines):
                 val_line = lines[i + 1].strip()
-                # Buscar los dos países en esa línea
                 encontrados = []
                 for pais, codigo in PAISES.items():
                     if pais in val_line and codigo not in encontrados:
@@ -145,31 +164,37 @@ def parsear_di(text):
                 break
 
     # Fallback: buscar en todo el texto
-    if not datos['pais_procedencia'] or not datos['pais_fabricacion']:
+    if not datos['pais_procedencia']:
         for pais, codigo in PAISES.items():
-            if pais in text.upper():
+            if pais in text_norm_upper:
+                datos['pais_procedencia'] = codigo
                 if not datos['pais_fabricacion']:
                     datos['pais_fabricacion'] = codigo
-                if not datos['pais_procedencia']:
-                    datos['pais_procedencia'] = codigo
                 break
 
     if not datos['pais_procedencia']:
         alertas.append("⚠️ No se encontró país de procedencia en el DI.")
     if not datos['pais_fabricacion']:
         alertas.append("⚠️ No se encontró país de fabricación en el DI.")
+
+    # Régimen
     m = re.search(r'REGIMEN[^0-9]*(\d{1,3})', text, re.IGNORECASE)
     datos['regimen'] = m.group(1) if m else '20'
+
+    # Año fabricación ENGINE: ZA(XXXXXX)
     m = re.search(r'ZA\(0*(\d{4})\)', text)
     datos['anio_fab_di'] = m.group(1) if m else ''
+
     return datos, alertas
+
 
 # ─── PARSEO DNRPA ───
 
 def parsear_dnrpa(text, label=""):
     datos = {}
     alertas = []
-    m = re.search(r'(\d{3})\s+([A-Z]+)\s+(\w+)\s+(\w+)', text)
+
+    m = re.search(r'(\d{3})\s+([A-Z]+)\s+(\w+)\s+(\w+)', text.upper())
     if m:
         datos['id_marca'] = m.group(1)
         datos['marca_desc'] = m.group(2)
@@ -179,6 +204,7 @@ def parsear_dnrpa(text, label=""):
         alertas.append(f"❌ No se encontró marca/modelo en DNRPA {label}.")
         datos['id_marca'] = ''
         datos['id_modelo'] = ''
+
     datos['tipos'] = {}
     lines = text.split('\n')
     for i, line in enumerate(lines):
@@ -190,9 +216,12 @@ def parsear_dnrpa(text, label=""):
             peso_m = re.search(r'(\d[\d,\.]+)\s*(KGS?|C\.C\.)', contexto, re.IGNORECASE)
             peso = peso_m.group(1).replace(',', '').replace('.', '') if peso_m else ''
             datos['tipos'][tipo_key] = {'codigo': codigo, 'peso': peso}
+
     if not datos['tipos']:
         alertas.append(f"❌ No se encontraron tipos (BLOCK/MOTOR) en DNRPA {label}.")
+
     return datos, alertas
+
 
 # ─── PARSEO FACTURA ───
 
@@ -209,6 +238,7 @@ def parsear_facturas(textos):
                         break
     return motores
 
+
 # ─── GENERAR TXT ───
 
 def generar_txt(di, items_procesados, lcm_valor):
@@ -219,15 +249,19 @@ def generar_txt(di, items_procesados, lcm_valor):
     except:
         anio_dos = di.get('anio', '26')
         fecha_str = di.get('fecha_nac', '')
+
     nro_despacho = f"{di['nro_despacho']}/{anio_dos}"
     id_aduana = di.get('id_aduana', '001')
+
     if lcm_valor and lcm_valor.strip():
         parts = (re.split(r'[/\-\s]+', lcm_valor.strip()) + ["0","0","0"])[:3]
         lcm_tipo, lcm_nro, lcm_anio = parts
     else:
         lcm_tipo, lcm_nro, lcm_anio = "0", "0", "0"
+
     def q(v): return f'"{v}"'
     def safe(v): return str(v).strip().replace(" ", "") if v else ""
+
     caratula = ";".join([
         q(id_aduana), q(nro_despacho), q("00"), q("12"),
         q(di.get('cuit_importador','')), q("12"),
@@ -237,6 +271,7 @@ def generar_txt(di, items_procesados, lcm_valor):
         q(str(len(items_procesados))), q("N"), q("S"),
         q(""), q(""), q(""), q(""), q("")
     ])
+
     lineas = []
     for i, item in enumerate(items_procesados, start=1):
         dnrpa = item['dnrpa']
@@ -253,20 +288,25 @@ def generar_txt(di, items_procesados, lcm_valor):
             q(anio), q(anio),
             q(dnrpa.get('id_marca','')), q(nro_motor),
             q("000"), q("NOPOSEE"),
-            q(di.get('pais_fabricacion', di.get('pais_procedencia','212'))), q(str(peso)), q("N")
+            q(di.get('pais_fabricacion', di.get('pais_procedencia','212'))),
+            q(str(peso)), q("N")
         ])
         lineas.append(linea)
+
     return caratula + "\n" + "\n".join(lineas)
+
 
 # ─── GENERAR EXCEL ───
 
 def generar_excel(di, items_procesados, lcm_valor):
     wb = openpyxl.load_workbook(TEMPLATE_PATH)
     ws = wb['ANVERSO']
+
     try:
         fecha_dt = datetime.datetime.strptime(di['fecha_nac'], "%d/%m/%Y")
     except:
         fecha_dt = datetime.datetime.now()
+
     ws['E3'] = di['nro_despacho']
     ws['J3'] = fecha_dt
     ws['L3'] = di.get('regimen', '20')
@@ -274,12 +314,17 @@ def generar_excel(di, items_procesados, lcm_valor):
     ws['L7'] = di.get('cuit_importador', '')
     ws['I9'] = di.get('importador', '')
     ws['L9'] = di.get('cuit_comprador', '')
-    try: ws['E11'] = int(di.get('pais_procedencia', 212))
-    except: ws['E11'] = di.get('pais_procedencia', 212)
+    try:
+        ws['E11'] = int(di.get('pais_procedencia', 212))
+    except:
+        ws['E11'] = di.get('pais_procedencia', 212)
+
     for row_idx in range(16, 31):
         for col_idx in range(1, 14):
             ws.cell(row=row_idx, column=col_idx).value = None
+
     lcm_excel = lcm_valor.strip() if lcm_valor and lcm_valor.strip() else 'XXX'
+
     for i, item in enumerate(items_procesados):
         row = 16 + i
         dnrpa = item['dnrpa']
@@ -289,6 +334,7 @@ def generar_excel(di, items_procesados, lcm_valor):
         peso = dnrpa.get('tipos',{}).get(tipo_key,{}).get('peso','')
         nro_motor = item.get('motor','') if tipo == 'ENGINE' else ''
         anio = str(item['anio_fab'])
+
         ws.cell(row=row, column=1).value = i + 1
         ws.cell(row=row, column=2).value = dnrpa.get('id_marca','')
         ws.cell(row=row, column=3).value = id_tipo
@@ -302,16 +348,18 @@ def generar_excel(di, items_procesados, lcm_valor):
         ws.cell(row=row, column=11).value = 'NO POSEE'
         ws.cell(row=row, column=12).value = di.get('pais_fabricacion', di.get('pais_procedencia','212'))
         ws.cell(row=row, column=13).value = str(peso)
+
     buf = BytesIO()
     wb.save(buf)
     buf.seek(0)
     return buf
 
+
 # ═══════════════════════════════════════════════
 # INTERFAZ
 # ═══════════════════════════════════════════════
 
-# ── SECCIÓN 1: DOCUMENTOS GENERALES ──
+# ── SECCIÓN 1 ──
 st.markdown('<p class="section-title">1 · Documentos generales</p>', unsafe_allow_html=True)
 col1, col2 = st.columns(2)
 with col1:
@@ -319,7 +367,7 @@ with col1:
 with col2:
     fc_files = st.file_uploader("🧾 Factura/s (PDF)", type="pdf", accept_multiple_files=True)
 
-# ── SECCIÓN 2: ÍTEMS ──
+# ── SECCIÓN 2 ──
 st.markdown('<p class="section-title">2 · Ítems de la DJIM</p>', unsafe_allow_html=True)
 st.caption("Agregá un ítem por cada motor o block del despacho.")
 
@@ -332,7 +380,6 @@ with col_rem:
         if st.button("➖ Quitar último"):
             st.session_state.n_items -= 1
 
-# Renderizar ítems usando n_items (número fijo, sin lista dinámica)
 tipos_seleccionados = []
 dnrpa_files = []
 anios_block = []
@@ -341,11 +388,7 @@ for idx in range(st.session_state.n_items):
     st.markdown(f"**Ítem {idx+1}**")
     col1, col2 = st.columns([1, 2])
     with col1:
-        tipo = st.selectbox(
-            "Tipo",
-            ["ENGINE", "BLOCK"],
-            key=f"tipo_sel_{idx}"
-        )
+        tipo = st.selectbox("Tipo", ["ENGINE", "BLOCK"], key=f"tipo_sel_{idx}")
         tipos_seleccionados.append(tipo)
         if tipo == "BLOCK":
             anio = st.text_input("Año fabricación", key=f"anio_sel_{idx}", placeholder="ej: 2025")
@@ -353,17 +396,16 @@ for idx in range(st.session_state.n_items):
         else:
             anios_block.append("")
     with col2:
-        dnrpa = st.file_uploader(f"DNRPA PDF", type="pdf", key=f"dnrpa_sel_{idx}")
+        dnrpa = st.file_uploader("DNRPA PDF", type="pdf", key=f"dnrpa_sel_{idx}")
         dnrpa_files.append(dnrpa)
     st.divider()
 
-# ── SECCIÓN 3: DATOS ADICIONALES ──
+# ── SECCIÓN 3 ──
 st.markdown('<p class="section-title">3 · Datos adicionales</p>', unsafe_allow_html=True)
 col1, col2 = st.columns(2)
 with col1:
-    st.caption("🌍 País de procedencia y fabricación se detectan automáticamente del DI.")
-with col2:
     tiene_lcm = st.radio("¿Tiene LCM?", ["No", "Sí"], horizontal=True)
+with col2:
     lcm_valor = ""
     if tiene_lcm == "Sí":
         lcm_valor = st.text_input("Número LCM", placeholder="ej: 39/12345/2025")
@@ -395,15 +437,8 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
         di_bytes = di_file.read()
         di_text = get_text(di_bytes, "di", dpi=250)
         di_datos, di_alertas = parsear_di(di_text)
-        with st.expander("🔍 Debug: texto extraído del DI (primeros 1000 chars)"):
-            st.code(di_text[:1000] if di_text else "VACÍO")
-        # Fallback si no se detectó del DI
-        if not di_datos.get('pais_procedencia'):
-            di_datos['pais_procedencia'] = '212'
-        if not di_datos.get('pais_fabricacion'):
-            di_datos['pais_fabricacion'] = di_datos['pais_procedencia']
 
-        fc_textos = [get_text(f.read(), f"fc_{i}") for i, f in enumerate(fc_files)]
+        fc_textos = [get_text(f.read(), f"fc_{i}", dpi=150) for i, f in enumerate(fc_files)]
         motores_factura = parsear_facturas(fc_textos)
 
         n_engines = sum(1 for t in tipos_seleccionados if t == 'ENGINE')
@@ -416,7 +451,7 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
             tipo_key = 'MOTOR' if tipo == 'ENGINE' else 'BLOCK'
 
             dnrpa_bytes = dnrpa_files[idx].read()
-            dnrpa_text = get_text(dnrpa_bytes, f"dnrpa_{idx}")
+            dnrpa_text = get_text(dnrpa_bytes, f"dnrpa_{idx}", dpi=250)
             dnrpa_datos, dnrpa_alertas = parsear_dnrpa(dnrpa_text, f"ítem {idx+1}")
             todas_alertas.extend(dnrpa_alertas)
 
@@ -458,7 +493,8 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
             st.error(e)
         st.stop()
 
-    st.markdown('<div class="alerta-ok">✅ Documentos procesados correctamente.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="alerta-ok">✅ Documentos procesados correctamente.</div>',
+                unsafe_allow_html=True)
     st.markdown("")
 
     with st.expander("📋 Ver datos extraídos"):
