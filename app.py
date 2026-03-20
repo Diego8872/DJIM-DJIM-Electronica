@@ -61,11 +61,11 @@ def extract_text_pdfplumber(pdf_bytes):
         pass
     return text.strip()
 
-def ocr_pdf_bytes(pdf_bytes, label):
+def ocr_pdf_bytes(pdf_bytes, label, dpi=150):
     tmp_pdf = f"/tmp/{label}.pdf"
     with open(tmp_pdf, "wb") as f:
         f.write(pdf_bytes)
-    subprocess.run(["pdftoppm", "-r", "300", tmp_pdf, f"/tmp/ocr_{label}"], capture_output=True)
+    subprocess.run(["pdftoppm", "-r", str(dpi), tmp_pdf, f"/tmp/ocr_{label}"], capture_output=True)
     images = sorted([x for x in os.listdir("/tmp") if x.startswith(f"ocr_{label}")])
     text = ""
     for img in images:
@@ -76,10 +76,10 @@ def ocr_pdf_bytes(pdf_bytes, label):
         except: pass
     return text
 
-def get_text(pdf_bytes, label):
+def get_text(pdf_bytes, label, dpi=250):
     text = extract_text_pdfplumber(pdf_bytes)
     if not text:
-        text = ocr_pdf_bytes(pdf_bytes, label)
+        text = ocr_pdf_bytes(pdf_bytes, label, dpi=dpi)
     return text
 
 # ─── PARSEO DI ───
@@ -389,7 +389,7 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
 
     with st.spinner("Procesando documentos..."):
         di_bytes = di_file.read()
-        di_text = get_text(di_bytes, "di")
+        di_text = get_text(di_bytes, "di", dpi=250)
         di_datos, di_alertas = parsear_di(di_text)
         # Fallback si no se detectó del DI
         if not di_datos.get('pais_procedencia'):
