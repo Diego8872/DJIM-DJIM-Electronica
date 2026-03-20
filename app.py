@@ -391,6 +391,8 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
         di_bytes = di_file.read()
         di_text = get_text(di_bytes, "di", dpi=250)
         di_datos, di_alertas = parsear_di(di_text)
+        with st.expander("🔍 Debug: texto extraído del DI (primeros 1000 chars)"):
+            st.code(di_text[:1000] if di_text else "VACÍO")
         # Fallback si no se detectó del DI
         if not di_datos.get('pais_procedencia'):
             di_datos['pais_procedencia'] = '212'
