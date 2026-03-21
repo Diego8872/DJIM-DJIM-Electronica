@@ -30,6 +30,9 @@ html, body, [class*="css"] { font-family: 'IBM Plex Sans', sans-serif; }
     padding: 0.8rem 1.2rem; color: #2e7d32; font-weight: 500; font-size: 0.9rem; margin: 0.5rem 0;
 }
 #GithubIcon { visibility: hidden; }
+[data-testid="stToolbar"] { visibility: hidden !important; }
+[data-testid="stDecoration"] { display: none !important; }
+[data-testid="stHeader"] { display: none !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -49,6 +52,7 @@ if "n_items" not in st.session_state:
 # ─── UTILIDADES PDF ───
 
 def extract_text_pdfplumber(pdf_bytes):
+    import pdfplumber
     text = ""
     try:
         with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
@@ -74,16 +78,13 @@ def ocr_pdf_bytes(pdf_bytes, label, dpi=250):
                                 capture_output=True, text=True)
         text += result.stdout
     for img in images:
-        try:
-            os.remove(f"/tmp/{img}")
-        except:
-            pass
+        try: os.remove(f"/tmp/{img}")
+        except: pass
     return text
 
 
 def get_text(pdf_bytes, label, dpi=250):
     text = extract_text_pdfplumber(pdf_bytes)
-    # Si pdfplumber no extrajo datos reales (solo labels del formulario), usar OCR
     tiene_datos = bool(
         re.search(r'\d{2}-\d{8}-\d', text) or
         re.search(r'\d{2}/\d{2}/\d{4}', text)
