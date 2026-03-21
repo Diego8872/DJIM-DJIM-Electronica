@@ -345,6 +345,10 @@ def generar_excel(di, items_procesados, lcm_valor):
         ws.cell(row=row, column=12).value = di.get('pais_fabricacion', di.get('pais_procedencia','212'))
         ws.cell(row=row, column=13).value = str(peso)
 
+    # Lugar y fecha de confección
+    ws['D35'] = 'CAPITAL FEDERAL'
+    ws['E37'] = datetime.datetime.now()
+
     buf = BytesIO()
     wb.save(buf)
     buf.seek(0)
@@ -438,23 +442,7 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
         for i, f in enumerate(fc_files):
             t = get_text(f.read(), f"fc_{i}", dpi=200)
             fc_textos.append(t)
-        with st.expander("🔍 Debug factura"):
-            texto_fc = "\n".join(fc_textos)
-            # Buscar contexto alrededor de ENGINE
-            idx_eng = texto_fc.upper().find('ENGINE')
-            if idx_eng >= 0:
-                st.write(f"ENGINE encontrado en posición {idx_eng}")
-                st.code(texto_fc[max(0,idx_eng-100):idx_eng+300])
-            else:
-                st.write("⚠️ ENGINE NO encontrado en el texto")
-                st.code(texto_fc[:1000])
-            # Buscar UNIQUE ID
-            idx_uid = texto_fc.upper().find('UNIQUE')
-            if idx_uid >= 0:
-                st.write(f"UNIQUE ID encontrado en posición {idx_uid}")
-                st.code(texto_fc[max(0,idx_uid-50):idx_uid+100])
-            else:
-                st.write("⚠️ UNIQUE ID NO encontrado")
+
         motores_factura = parsear_facturas(fc_textos)
 
         n_engines = sum(1 for t in tipos_seleccionados if t == 'ENGINE')
