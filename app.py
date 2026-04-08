@@ -29,10 +29,10 @@ html, body, [class*="css"] { font-family: 'IBM Plex Sans', sans-serif; }
     background: #e8f5e9; border: 1px solid #a5d6a7; border-radius: 8px;
     padding: 0.8rem 1.2rem; color: #2e7d32; font-weight: 500; font-size: 0.9rem; margin: 0.5rem 0;
 }
-#GithubIcon { visibility: hidden; }
 [data-testid="stToolbar"] { visibility: hidden !important; }
 [data-testid="stDecoration"] { display: none !important; }
 [data-testid="stHeader"] { display: none !important; }
+#GithubIcon { visibility: hidden; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -45,14 +45,12 @@ st.markdown("""
 
 TEMPLATE_PATH = "template_djim.xlsx"
 
-# ─── SESSION STATE ───
 if "n_items" not in st.session_state:
     st.session_state.n_items = 0
 
 # ─── UTILIDADES PDF ───
 
 def extract_text_pdfplumber(pdf_bytes):
-    import pdfplumber
     text = ""
     try:
         with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
@@ -69,13 +67,11 @@ def ocr_pdf_bytes(pdf_bytes, label, dpi=250):
     tmp_pdf = f"/tmp/{label}.pdf"
     with open(tmp_pdf, "wb") as f:
         f.write(pdf_bytes)
-    subprocess.run(["pdftoppm", "-r", str(dpi), tmp_pdf, f"/tmp/ocr_{label}"],
-                   capture_output=True)
+    subprocess.run(["pdftoppm", "-r", str(dpi), tmp_pdf, f"/tmp/ocr_{label}"], capture_output=True)
     images = sorted([x for x in os.listdir("/tmp") if x.startswith(f"ocr_{label}")])
     text = ""
     for img in images:
-        result = subprocess.run(["tesseract", f"/tmp/{img}", "stdout"],
-                                capture_output=True, text=True)
+        result = subprocess.run(["tesseract", f"/tmp/{img}", "stdout"], capture_output=True, text=True)
         text += result.stdout
     for img in images:
         try: os.remove(f"/tmp/{img}")
@@ -85,11 +81,8 @@ def ocr_pdf_bytes(pdf_bytes, label, dpi=250):
 
 def get_text(pdf_bytes, label, dpi=250):
     text = extract_text_pdfplumber(pdf_bytes)
-    tiene_datos = bool(
-        re.search(r'\d{2}-\d{8}-\d', text) or
-        re.search(r'\d{2}/\d{2}/\d{4}', text)
-    )
-    if not text or not tiene_datos:
+    # Usar OCR solo si pdfplumber no extrajo nada útil (menos de 50 chars)
+    if not text or len(text.strip()) < 50:
         text = ocr_pdf_bytes(pdf_bytes, label, dpi=dpi)
     return text
 
@@ -101,13 +94,10 @@ def parsear_di(text):
     datos = {}
     alertas = []
 
-    # Normalizar texto: OCR confunde I con 1 en "IC04" → "1C04"
     text_norm = re.sub(r'(?<!\d)1([CcGg])(\d{2})', r'I\1\2', text)
     text_norm_upper = text_norm.upper()
 
-    # Nro despacho: "26 001 IC04 039364 U"
-    m = re.search(r'(\d{2})\s+(\d{3})\s+((?:IC|IG)\d{2})\s+(\d+)\s+([A-Z])\b',
-                  text_norm_upper)
+    m = re.search(r'(\d{2})\s+(\d{3})\s+((?:IC|IG)\d{2})\s+(\d+)\s+([A-Z])\b', text_norm_upper)
     if m:
         anio, aduana, tipo, nro, dc = m.groups()
         datos['nro_despacho'] = f"{tipo}{nro}{dc}"
@@ -115,17 +105,14 @@ def parsear_di(text):
         datos['id_aduana'] = aduana
     else:
         alertas.append("❌ No se encontró número de despacho en el DI.")
-        datos['nro_despacho'] = ''
-        datos['anio'] = ''
-        datos['id_aduana'] = ''
+        dados = {'nro_despacho': '', 'anio': '', 'id_aduana': ''}
+        datos.update(dados)
 
-    # Fecha oficialización
     fechas = re.findall(r'\b(\d{2}/\d{2}/\d{4})\b', text)
     datos['fecha_nac'] = fechas[0] if fechas else ''
     if not fechas:
         alertas.append("❌ No se encontró fecha de oficialización en el DI.")
 
-    # CUITs
     cuits = re.findall(r'\b(\d{2}-\d{8}-\d)\b', text)
     if cuits:
         datos['cuit_importador'] = cuits[0]
@@ -139,12 +126,9 @@ def parsear_di(text):
     if len(cuits) < 2:
         alertas.append("⚠️ No se encontró CUIT del despachante. Se usará el valor por defecto.")
 
-    # Importador
     m = re.search(r'(FINNING\s+\S+(?:\s+\S+){1,3})', text.upper())
     datos['importador'] = m.group(1).strip() if m else 'FINNING SOLUCIONES MINERAS SA'
 
-    # País fabricación (Origen) y País procedencia
-    # En el DI: línea con "ORIGEN PAIS" seguida de los valores
     datos['pais_procedencia'] = ''
     datos['pais_fabricacion'] = ''
     lines = text_norm_upper.split('\n')
@@ -164,7 +148,6 @@ def parsear_di(text):
                     datos['pais_procedencia'] = encontrados[0]
                 break
 
-    # Fallback: buscar en todo el texto
     if not datos['pais_procedencia']:
         for pais, codigo in PAISES.items():
             if pais in text_norm_upper:
@@ -178,10 +161,8 @@ def parsear_di(text):
     if not datos['pais_fabricacion']:
         alertas.append("⚠️ No se encontró país de fabricación en el DI.")
 
-    # Régimen: siempre 20 para importación
     datos['regimen'] = '20'
 
-    # Año fabricación ENGINE: ZA(XXXXXX)
     m = re.search(r'ZA\(0*(\d{4})\)', text)
     datos['anio_fab_di'] = m.group(1) if m else ''
 
@@ -225,14 +206,36 @@ def parsear_dnrpa(text, label=""):
 
 # ─── PARSEO FACTURA ───
 
-def parsear_facturas(textos):
+def parsear_facturas_streaming(fc_files, n_engines):
+    """Procesa facturas página por página, para cuando encuentra todos los UNIQUE IDs."""
     motores = []
-    lines = "\n".join(textos).split('\n')
-    for i, line in enumerate(lines):
-        # Buscar UNIQUE ID directamente — puede estar antes o después de ENGINE
-        uid = re.search(r'UNIQUE\s+ID[:\s]+([A-Z0-9]+)', line, re.IGNORECASE)
-        if uid:
-            motores.append(uid.group(1))
+    for fc_f in fc_files:
+        if len(motores) >= n_engines:
+            break
+        fc_bytes = fc_f.read()
+        # Intentar texto nativo primero
+        text_total = extract_text_pdfplumber(fc_bytes)
+        if text_total and len(text_total.strip()) > 50:
+            # PDF nativo: buscar todos los UNIQUE IDs de una vez
+            for line in text_total.split('\n'):
+                uid = re.search(r'UNIQUE\s+ID[:\s]+([A-Z0-9]+)', line, re.IGNORECASE)
+                if uid and uid.group(1) not in motores:
+                    motores.append(uid.group(1))
+        else:
+            # PDF escaneado: OCR página por página
+            try:
+                with pdfplumber.open(BytesIO(fc_bytes)) as pdf:
+                    total_pages = len(pdf.pages)
+            except:
+                total_pages = 0
+            for page_num in range(total_pages):
+                if len(motores) >= n_engines:
+                    break
+                page_text = ocr_pdf_bytes(fc_bytes, f"fc_p{page_num}", dpi=200)
+                for line in page_text.split('\n'):
+                    uid = re.search(r'UNIQUE\s+ID[:\s]+([A-Z0-9]+)', line, re.IGNORECASE)
+                    if uid and uid.group(1) not in motores:
+                        motores.append(uid.group(1))
     return motores
 
 
@@ -311,10 +314,8 @@ def generar_excel(di, items_procesados, lcm_valor):
     ws['L7'] = di.get('cuit_importador', '')
     ws['I9'] = di.get('importador', '')
     ws['L9'] = di.get('cuit_comprador', '')
-    try:
-        ws['E11'] = int(di.get('pais_procedencia', 212))
-    except:
-        ws['E11'] = di.get('pais_procedencia', 212)
+    try: ws['E11'] = int(di.get('pais_procedencia', 212))
+    except: ws['E11'] = di.get('pais_procedencia', 212)
 
     for row_idx in range(16, 31):
         for col_idx in range(1, 14):
@@ -346,7 +347,6 @@ def generar_excel(di, items_procesados, lcm_valor):
         ws.cell(row=row, column=12).value = di.get('pais_fabricacion', di.get('pais_procedencia','212'))
         ws.cell(row=row, column=13).value = str(peso)
 
-    # Lugar y fecha de confección
     ws['D35'] = 'CAPITAL FEDERAL'
     ws['E37'] = datetime.datetime.now()
 
@@ -360,7 +360,6 @@ def generar_excel(di, items_procesados, lcm_valor):
 # INTERFAZ
 # ═══════════════════════════════════════════════
 
-# ── SECCIÓN 1 ──
 st.markdown('<p class="section-title">1 · Documentos generales</p>', unsafe_allow_html=True)
 col1, col2 = st.columns(2)
 with col1:
@@ -368,7 +367,6 @@ with col1:
 with col2:
     fc_files = st.file_uploader("🧾 Factura/s (PDF)", type="pdf", accept_multiple_files=True)
 
-# ── SECCIÓN 2 ──
 st.markdown('<p class="section-title">2 · Ítems de la DJIM</p>', unsafe_allow_html=True)
 st.caption("Agregá un ítem por cada motor o block del despacho.")
 
@@ -401,7 +399,6 @@ for idx in range(st.session_state.n_items):
         dnrpa_files.append(dnrpa)
     st.divider()
 
-# ── SECCIÓN 3 ──
 st.markdown('<p class="section-title">3 · Datos adicionales</p>', unsafe_allow_html=True)
 col1, col2 = st.columns(2)
 with col1:
@@ -411,9 +408,34 @@ with col2:
     if tiene_lcm == "Sí":
         lcm_valor = st.text_input("Número LCM", placeholder="ej: 39/12345/2025")
 
+# ── DESCARGAS PERSISTENTES ──
+if 'resultado_txt' in st.session_state or 'resultado_excel' in st.session_state:
+    st.markdown('<p class="section-title">4 · Descargar</p>', unsafe_allow_html=True)
+    col1, col2 = st.columns(2)
+    with col1:
+        if 'resultado_txt' in st.session_state:
+            st.download_button(
+                "📥 DJIM Electrónica (.txt)",
+                data=st.session_state['resultado_txt'].encode('utf-8'),
+                file_name="DJIM_ELECTRONICA.txt",
+                mime="text/plain",
+                use_container_width=True,
+                key="dl_txt"
+            )
+    with col2:
+        if 'resultado_excel' in st.session_state:
+            nro = st.session_state.get('resultado_nro', 'DJIM')
+            st.download_button(
+                "📥 DJIM Excel (.xlsx)",
+                data=st.session_state['resultado_excel'],
+                file_name=f"DJIM_{nro}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                key="dl_excel"
+            )
+
 st.markdown("---")
 
-# ── PROCESAR ──
 if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=True):
 
     errores = []
@@ -439,14 +461,9 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
         di_text = get_text(di_bytes, "di", dpi=250)
         di_datos, di_alertas = parsear_di(di_text)
 
-        fc_textos = []
-        for i, f in enumerate(fc_files):
-            t = get_text(f.read(), f"fc_{i}", dpi=200)
-            fc_textos.append(t)
-
-        motores_factura = parsear_facturas(fc_textos)
-
         n_engines = sum(1 for t in tipos_seleccionados if t == 'ENGINE')
+        motores_factura = parsear_facturas_streaming(fc_files, n_engines)
+
         items_procesados = []
         todas_alertas = di_alertas.copy()
         motor_idx = 0
@@ -473,7 +490,7 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
                     motor = motores_factura[motor_idx]
                     motor_idx += 1
                 else:
-                    todas_alertas.append(f"⚠️ No se encontró UNIQUE ID para ENGINE ítem {idx+1}. El campo quedará vacío.")
+                    todas_alertas.append(f"⚠️ No se encontró UNIQUE ID para ENGINE ítem {idx+1}.")
 
             if not dnrpa_datos.get('tipos',{}).get(tipo_key,{}).get('peso'):
                 todas_alertas.append(f"❌ No se encontró peso para {tipo} en DNRPA ítem {idx+1}.")
@@ -486,18 +503,18 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
         if n_engines > len(motores_factura):
             todas_alertas.append(
                 f"⚠️ Se declararon {n_engines} ENGINE(s) pero se encontraron "
-                f"solo {len(motores_factura)} UNIQUE ID(s) en la/s factura/s. Verificar manualmente."
+                f"solo {len(motores_factura)} UNIQUE ID(s). Verificar manualmente."
             )
+
+        # Guardar en session_state ANTES del stop
+        st.session_state['resultado_txt'] = generar_txt(di_datos, items_procesados, lcm_valor)
+        if os.path.exists(TEMPLATE_PATH):
+            excel_buf = generar_excel(di_datos, items_procesados, lcm_valor)
+            st.session_state['resultado_excel'] = excel_buf.read()
+            st.session_state['resultado_nro'] = di_datos.get('nro_despacho', 'DJIM')
 
     for a in [x for x in todas_alertas if x.startswith("⚠️")]:
         st.warning(a)
-
-    # Guardar en session_state SIEMPRE antes del stop
-    st.session_state['resultado_txt'] = generar_txt(di_datos, items_procesados, lcm_valor)
-    if os.path.exists(TEMPLATE_PATH):
-        excel_buf = generar_excel(di_datos, items_procesados, lcm_valor)
-        st.session_state['resultado_excel'] = excel_buf.read()
-        st.session_state['resultado_nro'] = di_datos.get('nro_despacho', 'DJIM')
 
     errores_criticos = [x for x in todas_alertas if x.startswith("❌")]
     if errores_criticos:
@@ -505,8 +522,7 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
             st.error(e)
         st.stop()
 
-    st.markdown('<div class="alerta-ok">✅ Documentos procesados correctamente.</div>',
-                unsafe_allow_html=True)
+    st.markdown('<div class="alerta-ok">✅ Documentos procesados correctamente.</div>', unsafe_allow_html=True)
     st.markdown("")
 
     with st.expander("📋 Ver datos extraídos"):
@@ -521,31 +537,3 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
                 'anio_fab': item['anio_fab'],
                 'motor': item.get('motor',''),
             })
-
-
-
-# ── DESCARGAS PERSISTENTES (fuera del bloque procesar) ──
-if 'resultado_txt' in st.session_state or 'resultado_excel' in st.session_state:
-    st.markdown('<p class="section-title">4 · Descargar</p>', unsafe_allow_html=True)
-    col1, col2 = st.columns(2)
-    with col1:
-        if 'resultado_txt' in st.session_state:
-            st.download_button(
-                "📥 DJIM Electrónica (.txt)",
-                data=st.session_state['resultado_txt'].encode('utf-8'),
-                file_name="DJIM_ELECTRONICA.txt",
-                mime="text/plain",
-                use_container_width=True,
-                key="dl_txt"
-            )
-    with col2:
-        if 'resultado_excel' in st.session_state:
-            nro = st.session_state.get('resultado_nro', 'DJIM')
-            st.download_button(
-                "📥 DJIM Excel (.xlsx)",
-                data=st.session_state['resultado_excel'],
-                file_name=f"DJIM_{nro}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
-                key="dl_excel"
-            )
