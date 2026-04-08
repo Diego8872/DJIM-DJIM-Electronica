@@ -408,32 +408,6 @@ with col2:
     if tiene_lcm == "Sí":
         lcm_valor = st.text_input("Número LCM", placeholder="ej: 39/12345/2025")
 
-# ── DESCARGAS PERSISTENTES ──
-if 'resultado_txt' in st.session_state or 'resultado_excel' in st.session_state:
-    st.markdown('<p class="section-title">4 · Descargar</p>', unsafe_allow_html=True)
-    col1, col2 = st.columns(2)
-    with col1:
-        if 'resultado_txt' in st.session_state:
-            st.download_button(
-                "📥 DJIM Electrónica (.txt)",
-                data=st.session_state['resultado_txt'].encode('utf-8'),
-                file_name="DJIM_ELECTRONICA.txt",
-                mime="text/plain",
-                use_container_width=True,
-                key="dl_txt"
-            )
-    with col2:
-        if 'resultado_excel' in st.session_state:
-            nro = st.session_state.get('resultado_nro', 'DJIM')
-            st.download_button(
-                "📥 DJIM Excel (.xlsx)",
-                data=st.session_state['resultado_excel'],
-                file_name=f"DJIM_{nro}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
-                key="dl_excel"
-            )
-
 st.markdown("---")
 
 if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=True):
@@ -537,3 +511,29 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
                 'anio_fab': item['anio_fab'],
                 'motor': item.get('motor',''),
             })
+
+# ── DESCARGAS PERSISTENTES (después de procesar) ──
+if 'resultado_txt' in st.session_state or 'resultado_excel' in st.session_state:
+    st.markdown('<p class="section-title">4 · Descargar</p>', unsafe_allow_html=True)
+    col1, col2 = st.columns(2)
+    with col1:
+        if 'resultado_txt' in st.session_state:
+            st.download_button(
+                "📥 DJIM Electrónica (.txt)",
+                data=st.session_state['resultado_txt'].encode('utf-8'),
+                file_name="DJIM_ELECTRONICA.txt",
+                mime="text/plain",
+                use_container_width=True,
+                key="dl_txt"
+            )
+    with col2:
+        if 'resultado_excel' in st.session_state:
+            nro = st.session_state.get('resultado_nro', 'DJIM')
+            st.download_button(
+                "📥 DJIM Excel (.xlsx)",
+                data=st.session_state['resultado_excel'],
+                file_name=f"DJIM_{nro}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                key="dl_excel"
+            )
