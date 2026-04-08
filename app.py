@@ -350,6 +350,18 @@ def generar_excel(di, items_procesados, lcm_valor):
     ws['D35'] = 'CAPITAL FEDERAL'
     ws['E37'] = datetime.datetime.now()
 
+    # Aduana
+    ADUANAS_NOMBRE = {
+        '001': '001-BS.AS. CAPITAL', '003': '003-BAHIA BLANCA', '004': '004-BARILOCHE',
+        '008': '008-CAMPANA', '017': '017-CORDOBA', '029': '029-IGUAZU',
+        '033': '033-LA PLATA', '037': '037-MAR DEL PLATA', '038': '038-MENDOZA',
+        '052': '052-ROSARIO', '053': '053-SALTA', '055': '055-SAN JUAN',
+        '073': '073-EZEIZA', '074': '074-TUCUMAN', '075': '075-NEUQUEN',
+        '091': '091-BS.AS. NORTE', '092': '092-BS.AS. SUR',
+    }
+    id_aduana = di.get('id_aduana', '001')
+    ws['D31'] = ADUANAS_NOMBRE.get(id_aduana, f"{id_aduana}-")
+
     buf = BytesIO()
     wb.save(buf)
     buf.seek(0)
