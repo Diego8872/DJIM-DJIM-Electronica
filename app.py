@@ -92,18 +92,18 @@ def get_text(pdf_bytes, label, dpi=250):
 
 def parsear_nro_despacho(text_upper):
     """Intenta extraer nro despacho con varios patrones para tolerar errores de OCR."""
-    # Patrón normal: "26 073 IC04 043712 V"
-    m = re.search(r'(\d{2})\s+(\d{3})\s+((?:IC|IG)\d{2})\s+(\d+)\s+([A-Z])\b', text_upper)
+    # Patrón normal con fin flexible (espacio, fin de línea, o cualquier no-dígito)
+    m = re.search(r'(\d{2})\s+(\d{3})\s+((?:IC|IG)\d{2})\s+(\d+)\s+([A-Z])(?:\s|$|[^A-Z0-9])', text_upper)
     if m:
-        return m.groups()
+        return m.group(1), m.group(2), m.group(3), m.group(4), m.group(5)
 
     # Fallback: OCR corta la I → "26 073 C04 043712 V"
-    m = re.search(r'(\d{2})\s+(\d{3})\s+([CG]\d{2})\s+(\d+)\s+([A-Z])\b', text_upper)
+    m = re.search(r'(\d{2})\s+(\d{3})\s+([CG]\d{2})\s+(\d+)\s+([A-Z])(?:\s|$|[^A-Z0-9])', text_upper)
     if m:
-        anio, aduana, tipo_parcial, nro, dc = m.groups()
+        anio, aduana, tipo_parcial, nro, dc = m.group(1), m.group(2), m.group(3), m.group(4), m.group(5)
         return anio, aduana, 'I' + tipo_parcial, nro, dc
 
-    # Fallback 2: buscar patrón en el código de barras "*26073IC04043712V*"
+    # Fallback 2: código de barras "*26073IC04043712V*"
     m = re.search(r'\*(\d{2})(\d{3})(IC\d{2}|IG\d{2})(\d+)([A-Z])\*', text_upper)
     if m:
         return m.groups()
@@ -495,10 +495,7 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
     with st.spinner("Procesando documentos..."):
         di_bytes = di_file.read()
         di_text = get_text(di_bytes, "di", dpi=250)
-        # DEBUG TEMPORAL
-        import re as _re
-        chars = len(_re.findall(r'[A-Za-z0-9]', di_text))
-        st.info(f"DEBUG DI: {chars} chars útiles, primeros 300: {di_text[:300]!r}")
+
         di_datos, di_alertas = parsear_di(di_text)
 
         n_engines = sum(1 for t in tipos_seleccionados if t == 'ENGINE')
