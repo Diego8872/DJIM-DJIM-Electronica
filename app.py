@@ -495,6 +495,10 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
     with st.spinner("Procesando documentos..."):
         di_bytes = di_file.read()
         di_text = get_text(di_bytes, "di", dpi=250)
+        # DEBUG TEMPORAL
+        import re as _re
+        chars = len(_re.findall(r'[A-Za-z0-9]', di_text))
+        st.info(f"DEBUG DI: {chars} chars útiles, primeros 300: {di_text[:300]!r}")
         di_datos, di_alertas = parsear_di(di_text)
 
         n_engines = sum(1 for t in tipos_seleccionados if t == 'ENGINE')
