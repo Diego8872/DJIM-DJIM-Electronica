@@ -81,7 +81,9 @@ def ocr_pdf_bytes(pdf_bytes, label, dpi=250):
 
 def get_text(pdf_bytes, label, dpi=250):
     text = extract_text_pdfplumber(pdf_bytes)
-    if not text or len(text.strip()) < 50:
+    # Verificar que tenga datos reales (letras y números), no solo espacios/símbolos
+    chars_utiles = len(re.findall(r'[A-Za-z0-9]', text))
+    if not text or chars_utiles < 30:
         text = ocr_pdf_bytes(pdf_bytes, label, dpi=dpi)
     return text
 
