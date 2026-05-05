@@ -81,33 +81,37 @@ def ocr_pdf_bytes(pdf_bytes, label, dpi=250):
 
 def get_text(pdf_bytes, label, dpi=250):
     text = extract_text_pdfplumber(pdf_bytes)
-    # Verificar que tenga datos reales (letras y números), no solo espacios/símbolos
     chars_utiles = len(re.findall(r'[A-Za-z0-9]', text))
     if not text or chars_utiles < 30:
         text = ocr_pdf_bytes(pdf_bytes, label, dpi=dpi)
     return text
 
 
+def normalizar_ocr(text):
+    """Corrige errores comunes de OCR antes del parseo."""
+    # 1C04 o 1CO4 → IC04 (I confundida con 1, O confundida con 0)
+    text = re.sub(r'(?<!\d)1([CG])[O0](\d)', r'IC0\2', text, flags=re.IGNORECASE)
+    text = re.sub(r'(?<!\d)1([CG])(\d)', r'I\1\2', text, flags=re.IGNORECASE)
+    # ICO4 → IC04
+    text = re.sub(r'IC[Oo](\d)', r'IC0\1', text)
+    text = re.sub(r'IG[Oo](\d)', r'IG0\1', text)
+    # O73 → 073 (O al inicio de número de aduana)
+    text = re.sub(r'\bO(\d{2})\b', r'0\1', text)
+    return text
+
+
 # ─── PARSEO DI ───
 
 def parsear_nro_despacho(text_upper):
-    """Intenta extraer nro despacho con varios patrones para tolerar errores de OCR."""
-    # Patrón normal con fin flexible (espacio, fin de línea, o cualquier no-dígito)
     m = re.search(r'(\d{2})\s+(\d{3})\s+((?:IC|IG)\d{2})\s+(\d+)\s+([A-Z])(?:\s|$|[^A-Z0-9])', text_upper)
     if m:
         return m.group(1), m.group(2), m.group(3), m.group(4), m.group(5)
-
-    # Fallback: OCR corta la I → "26 073 C04 043712 V"
     m = re.search(r'(\d{2})\s+(\d{3})\s+([CG]\d{2})\s+(\d+)\s+([A-Z])(?:\s|$|[^A-Z0-9])', text_upper)
     if m:
-        anio, aduana, tipo_parcial, nro, dc = m.group(1), m.group(2), m.group(3), m.group(4), m.group(5)
-        return anio, aduana, 'I' + tipo_parcial, nro, dc
-
-    # Fallback 2: código de barras "*26073IC04043712V*"
+        return m.group(1), m.group(2), 'I' + m.group(3), m.group(4), m.group(5)
     m = re.search(r'\*(\d{2})(\d{3})(IC\d{2}|IG\d{2})(\d+)([A-Z])\*', text_upper)
     if m:
         return m.groups()
-
     return None
 
 
@@ -116,7 +120,8 @@ def parsear_di(text):
     datos = {}
     alertas = []
 
-    text_norm = re.sub(r'(?<!\d)1([CcGg])(\d{2})', r'I\1\2', text)
+    # Normalizar errores de OCR ANTES de procesar
+    text_norm = normalizar_ocr(text)
     text_norm_upper = text_norm.upper()
 
     ADUANAS = {
@@ -150,8 +155,7 @@ def parsear_di(text):
         anio, aduana, tipo, nro, dc = result
         datos['nro_despacho'] = f"{tipo}{nro}{dc}"
         datos['anio'] = anio
-        # Buscar aduana por nombre en el texto
-        id_aduana = aduana  # fallback al código del nro despacho
+        id_aduana = aduana
         for nombre_aduana, codigo_aduana in ADUANAS.items():
             if nombre_aduana in text_norm_upper:
                 id_aduana = codigo_aduana
@@ -163,12 +167,12 @@ def parsear_di(text):
         datos['anio'] = ''
         datos['id_aduana'] = ''
 
-    fechas = re.findall(r'\b(\d{2}/\d{2}/\d{4})\b', text)
+    fechas = re.findall(r'\b(\d{2}/\d{2}/\d{4})\b', text_norm)
     datos['fecha_nac'] = fechas[0] if fechas else ''
     if not fechas:
         alertas.append("❌ No se encontró fecha de oficialización en el DI.")
 
-    cuits = re.findall(r'\b(\d{2}-\d{8}-\d)\b', text)
+    cuits = re.findall(r'\b(\d{2}-\d{8}-\d)\b', text_norm)
     if cuits:
         datos['cuit_importador'] = cuits[0]
         datos['cuit_comprador'] = cuits[0]
@@ -181,7 +185,7 @@ def parsear_di(text):
     if len(cuits) < 2:
         alertas.append("⚠️ No se encontró CUIT del despachante. Se usará el valor por defecto.")
 
-    m = re.search(r'(FINNING\s+\S+(?:\s+\S+){1,3})', text.upper())
+    m = re.search(r'(FINNING\s+\S+(?:\s+\S+){1,3})', text_norm.upper())
     datos['importador'] = m.group(1).strip() if m else 'FINNING SOLUCIONES MINERAS SA'
 
     datos['pais_procedencia'] = ''
@@ -218,7 +222,7 @@ def parsear_di(text):
 
     datos['regimen'] = '20'
 
-    m = re.search(r'ZA\(0*(\d{4})\)', text)
+    m = re.search(r'ZA\(0*(\d{4})\)', text_norm)
     datos['anio_fab_di'] = m.group(1) if m else ''
 
     return datos, alertas
@@ -495,7 +499,6 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
     with st.spinner("Procesando documentos..."):
         di_bytes = di_file.read()
         di_text = get_text(di_bytes, "di", dpi=250)
-
         di_datos, di_alertas = parsear_di(di_text)
 
         n_engines = sum(1 for t in tipos_seleccionados if t == 'ENGINE')
