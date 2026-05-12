@@ -507,7 +507,7 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
 
     with st.spinner("Procesando documentos..."):
         di_bytes = di_file.read()
-        di_text = get_text_di(di_bytes, "di", dpi=250)
+        di_text = get_text_di(di_bytes, "di", dpi=150)
         di_datos, di_alertas = parsear_di(di_text)
 
         n_engines = sum(1 for t in tipos_seleccionados if t == 'ENGINE')
