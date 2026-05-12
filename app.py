@@ -87,8 +87,13 @@ def get_text(pdf_bytes, label, dpi=250):
     return text
 
 def get_text_di(pdf_bytes, label, dpi=250):
-    """Para DI siempre OCR — más confiable que pdfplumber para estos PDFs.""""
-    return ocr_pdf_bytes(pdf_bytes, label, dpi=dpi)
+    """Para DI: pdfplumber primero, OCR si no tiene CUIT ni fecha."""
+    text = extract_text_pdfplumber(pdf_bytes)
+    tiene_cuit = bool(re.search(r'\d{2}-\d{8}-\d', text))
+    tiene_fecha = bool(re.search(r'\d{2}/\d{2}/\d{4}', text))
+    if not tiene_cuit or not tiene_fecha:
+        text = ocr_pdf_bytes(pdf_bytes, label, dpi=dpi)
+    return text
 
 
 def normalizar_ocr(text):
