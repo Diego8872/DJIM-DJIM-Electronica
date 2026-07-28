@@ -63,7 +63,16 @@ def extract_text_pdfplumber(pdf_bytes):
     return text.strip()
 
 
-def ocr_pdf_bytes(pdf_bytes, label, dpi=250):
+def ocr_pdf_bytes(pdf_bytes, label, dpi=250, psm=None, upscale=1):
+    """
+    psm: si se especifica, fuerza el modo de segmentación de página de tesseract
+         (6 = asume un único bloque uniforme de texto; mejor para tablas chicas
+         tipo capturas de pantalla, donde el psm automático reordena columnas).
+    upscale: factor de reescalado de la imagen antes de pasarla a tesseract.
+             Útil cuando la imagen fuente es de baja resolución (ej: DNRPA
+             que son capturas de pantalla), ya que tesseract reconoce mejor
+             dígitos y letras chicas en imágenes más grandes.
+    """
     tmp_pdf = f"/tmp/{label}.pdf"
     with open(tmp_pdf, "wb") as f:
         f.write(pdf_bytes)
@@ -71,7 +80,20 @@ def ocr_pdf_bytes(pdf_bytes, label, dpi=250):
     images = sorted([x for x in os.listdir("/tmp") if x.startswith(f"ocr_{label}")])
     text = ""
     for img in images:
-        result = subprocess.run(["tesseract", f"/tmp/{img}", "stdout"], capture_output=True, text=True)
+        img_path = f"/tmp/{img}"
+        if upscale and upscale > 1:
+            try:
+                from PIL import Image, ImageOps
+                im = Image.open(img_path).convert("L")
+                im = im.resize((im.width * upscale, im.height * upscale), Image.LANCZOS)
+                im = ImageOps.autocontrast(im)
+                im.save(img_path)
+            except Exception:
+                pass
+        cmd = ["tesseract", img_path, "stdout"]
+        if psm:
+            cmd += ["--psm", str(psm)]
+        result = subprocess.run(cmd, capture_output=True, text=True)
         text += result.stdout
     for img in images:
         try: os.remove(f"/tmp/{img}")
@@ -79,11 +101,11 @@ def ocr_pdf_bytes(pdf_bytes, label, dpi=250):
     return text
 
 
-def get_text(pdf_bytes, label, dpi=250):
+def get_text(pdf_bytes, label, dpi=250, psm=None, upscale=1):
     text = extract_text_pdfplumber(pdf_bytes)
     chars_utiles = len(re.findall(r'[A-Za-z0-9]', text))
     if not text or chars_utiles < 30:
-        text = ocr_pdf_bytes(pdf_bytes, label, dpi=dpi)
+        text = ocr_pdf_bytes(pdf_bytes, label, dpi=dpi, psm=psm, upscale=upscale)
     return text
 
 def get_text_di(pdf_bytes, label, dpi=250):
@@ -133,6 +155,12 @@ def parsear_di(text):
     text_norm = normalizar_ocr(text)
     text_norm_upper = text_norm.upper()
 
+    # Este diccionario ahora se usa SOLO como fallback (ver más abajo), cuando
+    # no se pudo parsear el número de despacho. El código numérico de aduana
+    # que viene directamente del número de despacho es siempre más confiable
+    # que buscar el nombre de la aduana en todo el texto del DI (el nombre
+    # puede aparecer también en otras secciones, como la tabla de Ingresos
+    # Brutos por jurisdicción, y generar falsos positivos).
     ADUANAS = {
         'BS.AS. (CAPITAL)': '001', 'BS.AS.(CAPITAL)': '001', 'BUENOS AIRES CAPITAL': '001',
         'BAHIA BLANCA': '003', 'BARILOCHE': '004', 'CAMPANA': '008',
@@ -164,17 +192,23 @@ def parsear_di(text):
         anio, aduana, tipo, nro, dc = result
         datos['nro_despacho'] = f"{tipo}{nro}{dc}"
         datos['anio'] = anio
-        id_aduana = aduana
+        # FIX: el código de aduana (grupo 2) ya viene directamente del propio
+        # número de despacho (ej: "26 073 IC04 080265 C" -> 073 = EZEIZA), es
+        # confiable y NO se debe pisar con una búsqueda de nombre en todo el
+        # texto del DI.
+        datos['id_aduana'] = aduana
+    else:
+        alertas.append("❌ No se encontró número de despacho en el DI.")
+        datos['nro_despacho'] = ''
+        datos['anio'] = ''
+        # Fallback: si no se pudo parsear el número de despacho, intentamos
+        # recuperar la aduana buscando su nombre en el texto (mejor esto que nada).
+        id_aduana = ''
         for nombre_aduana, codigo_aduana in ADUANAS.items():
             if nombre_aduana in text_norm_upper:
                 id_aduana = codigo_aduana
                 break
         datos['id_aduana'] = id_aduana
-    else:
-        alertas.append("❌ No se encontró número de despacho en el DI.")
-        datos['nro_despacho'] = ''
-        datos['anio'] = ''
-        datos['id_aduana'] = ''
 
     fechas = re.findall(r'\b(\d{2}/\d{2}/\d{4})\b', text_norm)
     datos['fecha_nac'] = fechas[0] if fechas else ''
@@ -239,32 +273,71 @@ def parsear_di(text):
 
 # ─── PARSEO DNRPA ───
 
+# Los códigos de tipo son FIJOS en el sistema DNRPA (no dependen del OCR):
+# 09 = BLOCK, 23 = MOTOR.
+CODIGOS_TIPO_FIJOS = {'BLOCK': '09', 'MOTOR': '23'}
+
+# Palabras de encabezado que aparecen siempre en la tabla "Consulta
+# Marca-Tipo-Modelo" y que NO deben confundirse con la descripción de marca.
+_DNRPA_STOPWORDS = {
+    'CONSULTA', 'TABLA', 'MARCA', 'TIPO', 'TIPOS', 'MODELO', 'MODELOS',
+    'CODIGO', 'CÓDIGO', 'DESCRIPCION', 'DESCRIPCIÓN', 'DENOMINACION',
+    'DENOMINACIÓN', 'CERTIFICADO', 'PESO', 'UNIDAD', 'BLOCK', 'MOTOR',
+}
+
+
 def parsear_dnrpa(text, label=""):
+    """
+    El DNRPA suele ser una captura de pantalla (sin capa de texto), por lo
+    que estos datos vienen siempre de OCR. El OCR puede reordenar las
+    columnas de la tabla según la resolución/segmentación, así que en vez de
+    depender de un único regex secuencial ("165 CATERPILLAR C52 C2.8" en ese
+    orden exacto), buscamos cada dato de forma independiente en todo el
+    texto. Esto es mucho más tolerante a que el OCR separe las columnas en
+    líneas distintas.
+    """
     datos = {}
     alertas = []
+    text_upper = text.upper()
 
-    m = re.search(r'(\d{3})\s+([A-Z]+)\s+(\w+)\s+(\w+)', text.upper())
-    if m:
-        datos['id_marca'] = m.group(1)
-        datos['marca_desc'] = m.group(2)
-        datos['id_modelo'] = m.group(3)
-        datos['cm_modelo'] = m.group(4)
+    # ─ ID de marca: primer número de 3 dígitos "suelto" en la página ─
+    m_id = re.search(r'\b(\d{3})\b', text_upper)
+    id_marca = m_id.group(1) if m_id else ''
+
+    # ─ Descripción de marca: primera palabra de 4+ letras que no sea
+    #   un encabezado de tabla conocido (ej: CATERPILLAR) ─
+    palabras = re.findall(r'\b[A-ZÁÉÍÓÚÑ]{4,}\b', text_upper)
+    candidatas = [p for p in palabras if p not in _DNRPA_STOPWORDS]
+    marca_desc = candidatas[0] if candidatas else ''
+
+    # ─ Modelo: patrones tipo "C52", "C2.8", "C2", etc. ─
+    modelos = re.findall(r'\b([A-Z]{1,3}\d+(?:\.\d+)?)\b', text_upper)
+    id_modelo = modelos[0] if modelos else ''
+    cm_modelo = modelos[1] if len(modelos) > 1 else id_modelo
+
+    if id_marca and marca_desc:
+        datos['id_marca'] = id_marca
+        datos['marca_desc'] = marca_desc
+        datos['id_modelo'] = id_modelo
+        datos['cm_modelo'] = cm_modelo
     else:
         alertas.append(f"❌ No se encontró marca/modelo en DNRPA {label}.")
-        datos['id_marca'] = ''
-        datos['id_modelo'] = ''
+        datos['id_marca'] = id_marca
+        datos['id_modelo'] = id_modelo
 
+    # ─ Tipos (BLOCK/MOTOR) ─
+    # No dependemos de que el OCR lea correctamente el código numérico (23,
+    # 09): esos códigos son fijos, así que solo necesitamos detectar la
+    # palabra BLOCK o MOTOR en el texto.
     datos['tipos'] = {}
-    lines = text.split('\n')
-    for i, line in enumerate(lines):
-        m_tipo = re.match(r'^(\d{2})\s+(BLOCK|MOTOR)', line.strip(), re.IGNORECASE)
-        if m_tipo:
-            codigo = m_tipo.group(1)
-            tipo_key = m_tipo.group(2).upper()
-            contexto = line.strip() + ' ' + (lines[i+1].strip() if i+1 < len(lines) else '')
-            peso_m = re.search(r'(\d[\d,\.]+)\s*(KGS?|C\.C\.)', contexto, re.IGNORECASE)
-            peso = peso_m.group(1).replace(',', '').replace('.', '') if peso_m else ''
-            datos['tipos'][tipo_key] = {'codigo': codigo, 'peso': peso}
+    for tipo_key, codigo_fijo in CODIGOS_TIPO_FIJOS.items():
+        idx_tipo = text_upper.find(tipo_key)
+        if idx_tipo == -1:
+            continue
+        contexto = text_upper[idx_tipo: idx_tipo + 200]
+        peso_m = re.search(r'(\d[\d,\.]*)\s*(KGS?|C\.?C\.?)', contexto, re.IGNORECASE)
+        peso = peso_m.group(1).replace(',', '').replace('.', '') if peso_m else ''
+        datos['tipos'][tipo_key] = {'codigo': codigo_fijo, 'peso': peso}
 
     if not datos['tipos']:
         alertas.append(f"❌ No se encontraron tipos (BLOCK/MOTOR) en DNRPA {label}.")
@@ -522,7 +595,10 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
             tipo_key = 'MOTOR' if tipo == 'ENGINE' else 'BLOCK'
 
             dnrpa_bytes = dnrpa_files[idx].read()
-            dnrpa_text = get_text(dnrpa_bytes, f"dnrpa_{idx}", dpi=250)
+            # psm=6 + upscale=3: el DNRPA suele ser una captura de pantalla de
+            # baja resolución, así que agrandamos la imagen y forzamos modo de
+            # segmentación de bloque uniforme para mejorar el OCR de la tabla.
+            dnrpa_text = get_text(dnrpa_bytes, f"dnrpa_{idx}", dpi=250, psm=6, upscale=3)
             dnrpa_datos, dnrpa_alertas = parsear_dnrpa(dnrpa_text, f"ítem {idx+1}")
             todas_alertas.extend(dnrpa_alertas)
 
