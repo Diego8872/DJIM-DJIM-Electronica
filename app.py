@@ -239,16 +239,29 @@ def parsear_di(text):
         if 'ORIGEN' in line and ('PROCEDENCIA' in line or 'PAIS' in line):
             if i + 1 < len(lines):
                 val_line = lines[i + 1].strip()
-                encontrados = []
+                # FIX: no alcanza con juntar los países que aparecen en la
+                # línea (eso los ordena según el orden del diccionario
+                # PAISES, no según su posición real en el texto). Acá
+                # guardamos también la posición de cada match y ordenamos
+                # por esa posición: el DI siempre trae primero "Origen País"
+                # (fabricación) y después "País de Procedencia", así que el
+                # que aparece más a la izquierda es fabricación.
+                encontrados = []  # (posicion, codigo)
                 for pais, codigo in PAISES.items():
-                    if pais in val_line and codigo not in encontrados:
-                        encontrados.append(codigo)
-                if len(encontrados) >= 2:
-                    datos['pais_fabricacion'] = encontrados[0]
-                    datos['pais_procedencia'] = encontrados[1]
-                elif len(encontrados) == 1:
-                    datos['pais_fabricacion'] = encontrados[0]
-                    datos['pais_procedencia'] = encontrados[0]
+                    pos = val_line.find(pais)
+                    if pos != -1:
+                        encontrados.append((pos, codigo))
+                encontrados.sort(key=lambda x: x[0])
+                codigos_ordenados = []
+                for _, codigo in encontrados:
+                    if codigo not in codigos_ordenados:
+                        codigos_ordenados.append(codigo)
+                if len(codigos_ordenados) >= 2:
+                    datos['pais_fabricacion'] = codigos_ordenados[0]
+                    datos['pais_procedencia'] = codigos_ordenados[1]
+                elif len(codigos_ordenados) == 1:
+                    datos['pais_fabricacion'] = codigos_ordenados[0]
+                    datos['pais_procedencia'] = codigos_ordenados[0]
                 break
 
     if not datos['pais_procedencia']:
