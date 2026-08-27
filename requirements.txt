@@ -1,7 +1,6 @@
 streamlit==1.50.0
 pdfplumber
 openpyxl
-pillow
+Pillow
 pytesseract
 beautifulsoup4
-Pillow
