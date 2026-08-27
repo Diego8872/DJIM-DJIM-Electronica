@@ -6,6 +6,7 @@ import os
 import re
 import datetime
 from io import BytesIO
+from bs4 import BeautifulSoup
 
 st.set_page_config(page_title="DJIM / DJIM Electrónica", page_icon="📄", layout="centered")
 
@@ -345,6 +346,86 @@ def parsear_dnrpa(text, label=""):
     return datos, alertas
 
 
+def _clean_celda_html(td):
+    """Limpia el texto de una celda de la consulta DNRPA (saca &nbsp; y espacios extra)."""
+    text = td.get_text()
+    text = text.replace('\xa0', ' ')
+    return re.sub(r'\s+', ' ', text).strip()
+
+
+def parsear_dnrpa_html(html_bytes, label=""):
+    """
+    Parseo del DNRPA cuando el operador sube el .htm/.html de la consulta
+    "Marca-Tipo-Modelo" en vez de un PDF/captura. Es el camino preferido:
+    el HTML trae el dato como texto real, no como imagen, así que no
+    depende del OCR (nada de resoluciones, recortes ni capturas que fallan
+    distinto cada vez).
+
+    Estructura esperada (siempre la misma en esta consulta): las tablas de
+    encabezado tienen bgcolor="#2B6D85" (celeste) y las tablas con la fila
+    de datos real tienen bgcolor="#FFFFFF" (blanco). La primera tabla
+    blanca es Marca/Modelo (4 celdas: id_marca, marca_desc, id_modelo,
+    cm_modelo); la segunda es Tipos (4 celdas: código, denominación,
+    certificado, peso unidad).
+    """
+    datos = {}
+    alertas = []
+
+    try:
+        html_text = html_bytes.decode('utf-8')
+    except UnicodeDecodeError:
+        html_text = html_bytes.decode('latin-1', errors='ignore')
+
+    soup = BeautifulSoup(html_text, 'html.parser')
+
+    filas_blancas = []
+    for table in soup.find_all('table'):
+        bgcolor = (table.get('bgcolor') or '').upper()
+        if bgcolor in ('#FFFFFF', '#FFF', 'WHITE'):
+            for fila in table.find_all('tr'):
+                celdas = [_clean_celda_html(td) for td in fila.find_all('td')]
+                celdas = [c for c in celdas if c]
+                if celdas:
+                    filas_blancas.append(celdas)
+
+    # ─ Marca / Modelo (primera fila blanca) ─
+    if filas_blancas and len(filas_blancas[0]) >= 2:
+        fila = filas_blancas[0]
+        datos['id_marca'] = fila[0]
+        datos['marca_desc'] = fila[1]
+        datos['id_modelo'] = fila[2] if len(fila) > 2 else ''
+        datos['cm_modelo'] = fila[3] if len(fila) > 3 else datos['id_modelo']
+    else:
+        alertas.append(f"❌ No se encontró marca/modelo en DNRPA {label} (HTML).")
+        datos['id_marca'] = ''
+        datos['id_modelo'] = ''
+
+    # ─ Tipos (segunda fila blanca) ─
+    datos['tipos'] = {}
+    if len(filas_blancas) >= 2 and len(filas_blancas[1]) >= 2:
+        fila = filas_blancas[1]
+        codigo = fila[0]
+        denominacion = fila[1].upper()
+        peso_raw = fila[3] if len(fila) > 3 else (fila[2] if len(fila) > 2 else '')
+        peso_m = re.search(r'(\d[\d.,]*)', peso_raw)
+        peso = peso_m.group(1).replace('.', '').replace(',', '') if peso_m else ''
+
+        if 'MOTOR' in denominacion:
+            tipo_key = 'MOTOR'
+        elif 'BLOCK' in denominacion:
+            tipo_key = 'BLOCK'
+        else:
+            tipo_key = None
+
+        if tipo_key:
+            datos['tipos'][tipo_key] = {'codigo': codigo, 'peso': peso}
+
+    if not datos['tipos']:
+        alertas.append(f"❌ No se encontraron tipos (BLOCK/MOTOR) en DNRPA {label} (HTML).")
+
+    return datos, alertas
+
+
 # ─── PARSEO FACTURA ───
 
 def parsear_facturas_streaming(fc_files, n_engines):
@@ -543,7 +624,11 @@ for idx in range(st.session_state.n_items):
         else:
             anios_block.append("")
     with col2:
-        dnrpa = st.file_uploader("DNRPA PDF", type="pdf", key=f"dnrpa_sel_{idx}")
+        dnrpa = st.file_uploader(
+            "DNRPA (.htm recomendado, o PDF)",
+            type=["htm", "html", "pdf"],
+            key=f"dnrpa_sel_{idx}",
+        )
         dnrpa_files.append(dnrpa)
     st.divider()
 
@@ -595,11 +680,20 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
             tipo_key = 'MOTOR' if tipo == 'ENGINE' else 'BLOCK'
 
             dnrpa_bytes = dnrpa_files[idx].read()
-            # psm=6 + upscale=3: el DNRPA suele ser una captura de pantalla de
-            # baja resolución, así que agrandamos la imagen y forzamos modo de
-            # segmentación de bloque uniforme para mejorar el OCR de la tabla.
-            dnrpa_text = get_text(dnrpa_bytes, f"dnrpa_{idx}", dpi=250, psm=6, upscale=3)
-            dnrpa_datos, dnrpa_alertas = parsear_dnrpa(dnrpa_text, f"ítem {idx+1}")
+            dnrpa_nombre = (dnrpa_files[idx].name or "").lower()
+
+            if dnrpa_nombre.endswith(".htm") or dnrpa_nombre.endswith(".html"):
+                # Camino preferido: el HTML de la consulta DNRPA trae el dato
+                # como texto real, sin depender de OCR.
+                dnrpa_datos, dnrpa_alertas = parsear_dnrpa_html(dnrpa_bytes, f"ítem {idx+1}")
+            else:
+                # Fallback para capturas/PDF viejos: psm=6 + upscale=3 porque
+                # el DNRPA en PDF suele ser una captura de pantalla de baja
+                # resolución; agrandamos la imagen y forzamos modo de
+                # segmentación de bloque uniforme para mejorar el OCR.
+                dnrpa_text = get_text(dnrpa_bytes, f"dnrpa_{idx}", dpi=250, psm=6, upscale=3)
+                dnrpa_datos, dnrpa_alertas = parsear_dnrpa(dnrpa_text, f"ítem {idx+1}")
+
             todas_alertas.extend(dnrpa_alertas)
 
             if tipo == 'ENGINE':
