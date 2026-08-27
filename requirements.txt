@@ -3,3 +3,5 @@ pdfplumber
 openpyxl
 pillow
 pytesseract
+beautifulsoup4
+Pillow
