@@ -413,10 +413,16 @@ def parsear_dnrpa_html(html_bytes, label=""):
         datos['id_marca'] = ''
         datos['id_modelo'] = ''
 
-    # ─ Tipos (segunda fila blanca) ─
+    # ─ Tipos (todas las filas blancas desde la segunda en adelante) ─
+    # FIX: algunos motores tienen tanto código BLOCK como código MOTOR
+    # (el mismo motor sirve para las dos consultas), entonces la tabla
+    # "Tipos" trae DOS filas de datos, no una. Antes solo se leía
+    # filas_blancas[1] y se perdía la segunda fila (ej: se guardaba BLOCK
+    # y se ignoraba MOTOR, o viceversa). Ahora se recorren todas.
     datos['tipos'] = {}
-    if len(filas_blancas) >= 2 and len(filas_blancas[1]) >= 2:
-        fila = filas_blancas[1]
+    for fila in filas_blancas[1:]:
+        if len(fila) < 2:
+            continue
         codigo = fila[0]
         denominacion = fila[1].upper()
         peso_raw = fila[3] if len(fila) > 3 else (fila[2] if len(fila) > 2 else '')
