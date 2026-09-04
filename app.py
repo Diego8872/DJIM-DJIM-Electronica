@@ -232,37 +232,78 @@ def parsear_di(text):
     m = re.search(r'(FINNING\s+\S+(?:\s+\S+){1,3})', text_norm.upper())
     datos['importador'] = m.group(1).strip() if m else 'FINNING SOLUCIONES MINERAS SA'
 
-    datos['pais_procedencia'] = ''
-    datos['pais_fabricacion'] = ''
-    lines = text_norm_upper.split('\n')
-    for i, line in enumerate(lines):
-        if 'ORIGEN' in line and ('PROCEDENCIA' in line or 'PAIS' in line):
-            if i + 1 < len(lines):
-                val_line = lines[i + 1].strip()
-                # FIX: no alcanza con juntar los países que aparecen en la
-                # línea (eso los ordena según el orden del diccionario
-                # PAISES, no según su posición real en el texto). Acá
-                # guardamos también la posición de cada match y ordenamos
-                # por esa posición: el DI siempre trae primero "Origen País"
-                # (fabricación) y después "País de Procedencia", así que el
-                # que aparece más a la izquierda es fabricación.
-                encontrados = []  # (posicion, codigo)
-                for pais, codigo in PAISES.items():
-                    pos = val_line.find(pais)
-                    if pos != -1:
-                        encontrados.append((pos, codigo))
-                encontrados.sort(key=lambda x: x[0])
-                codigos_ordenados = []
-                for _, codigo in encontrados:
-                    if codigo not in codigos_ordenados:
-                        codigos_ordenados.append(codigo)
-                if len(codigos_ordenados) >= 2:
-                    datos['pais_fabricacion'] = codigos_ordenados[0]
-                    datos['pais_procedencia'] = codigos_ordenados[1]
-                elif len(codigos_ordenados) == 1:
-                    datos['pais_fabricacion'] = codigos_ordenados[0]
-                    datos['pais_procedencia'] = codigos_ordenados[0]
-                break
+    # ─ País de fabricación / procedencia, POR ÍTEM ─
+    # FIX: en despachos con varios ítems (ej: el motor + repuestos sueltos
+    # en el mismo DI), tomar el primer renglón "Origen País / Procedencia"
+    # de TODO el texto puede traer el país de un ítem que no es el motor
+    # (ej: tornillos clasificados en otra posición arancelaria). Acá se
+    # identifican específicamente los ítems cuya posición SIM empieza con
+    # 8408 o 8409 (motores de émbolo diesel/semi-diesel y sus partes, que
+    # es la familia arancelaria de motores/blocks) y se extrae el país de
+    # CADA uno de esos ítems puntualmente, en el orden en que aparecen.
+    # `paises_por_item` queda disponible para que el flujo principal le
+    # asigne a cada ENGINE/BLOCK cargado el país de su propio ítem del DI,
+    # en vez de un único país "global" para todo el despacho.
+    datos['paises_por_item'] = []
+    for m_item in re.finditer(r'\d{4}\s+N\s+(840[89]\.\d{2}\.\d{2}\.\d{3}[A-Z]?)', text_norm_upper):
+        pos_after = m_item.end()
+        m_val = re.search(r'[\d.,]+\s+.+?(UNIDAD|KILOGRAMO)\s', text_norm_upper[pos_after:pos_after + 600])
+        if not m_val:
+            continue
+        val_line = m_val.group(0)
+        encontrados = []  # (posicion, codigo)
+        for pais, codigo in PAISES.items():
+            pos = val_line.find(pais)
+            if pos != -1:
+                encontrados.append((pos, codigo))
+        encontrados.sort(key=lambda x: x[0])
+        codigos_ordenados = []
+        for _, codigo in encontrados:
+            if codigo not in codigos_ordenados:
+                codigos_ordenados.append(codigo)
+        if len(codigos_ordenados) >= 2:
+            datos['paises_por_item'].append({
+                'fabricacion': codigos_ordenados[0], 'procedencia': codigos_ordenados[1],
+            })
+        elif len(codigos_ordenados) == 1:
+            datos['paises_por_item'].append({
+                'fabricacion': codigos_ordenados[0], 'procedencia': codigos_ordenados[0],
+            })
+
+    if datos['paises_por_item']:
+        # Compatibilidad hacia atrás: pais_fabricacion/procedencia "global"
+        # quedan como el del primer ítem motor encontrado (sigue sirviendo
+        # de fallback en despachos de un solo ítem).
+        datos['pais_fabricacion'] = datos['paises_por_item'][0]['fabricacion']
+        datos['pais_procedencia'] = datos['paises_por_item'][0]['procedencia']
+    else:
+        # Fallback: ningún ítem con posición 8408/8409 (documento atípico).
+        # Se recurre al comportamiento anterior: primer renglón "Origen
+        # País/Procedencia" que aparezca en el texto.
+        datos['pais_procedencia'] = ''
+        datos['pais_fabricacion'] = ''
+        lines = text_norm_upper.split('\n')
+        for i, line in enumerate(lines):
+            if 'ORIGEN' in line and ('PROCEDENCIA' in line or 'PAIS' in line):
+                if i + 1 < len(lines):
+                    val_line = lines[i + 1].strip()
+                    encontrados = []
+                    for pais, codigo in PAISES.items():
+                        pos = val_line.find(pais)
+                        if pos != -1:
+                            encontrados.append((pos, codigo))
+                    encontrados.sort(key=lambda x: x[0])
+                    codigos_ordenados = []
+                    for _, codigo in encontrados:
+                        if codigo not in codigos_ordenados:
+                            codigos_ordenados.append(codigo)
+                    if len(codigos_ordenados) >= 2:
+                        datos['pais_fabricacion'] = codigos_ordenados[0]
+                        datos['pais_procedencia'] = codigos_ordenados[1]
+                    elif len(codigos_ordenados) == 1:
+                        datos['pais_fabricacion'] = codigos_ordenados[0]
+                        datos['pais_procedencia'] = codigos_ordenados[0]
+                    break
 
     if not datos['pais_procedencia']:
         for pais, codigo in PAISES.items():
@@ -525,7 +566,7 @@ def generar_txt(di, items_procesados, lcm_valor):
             q(anio), q(anio),
             q(dnrpa.get('id_marca','')), q(nro_motor),
             q("000"), q("NOPOSEE"),
-            q(di.get('pais_fabricacion', di.get('pais_procedencia','212'))),
+            q(item.get('pais_fabricacion', di.get('pais_fabricacion', di.get('pais_procedencia','212')))),
             q(str(peso)), q("N")
         ])
         lineas.append(linea)
@@ -581,7 +622,7 @@ def generar_excel(di, items_procesados, lcm_valor):
         ws.cell(row=row, column=9).value = nro_motor
         ws.cell(row=row, column=10).value = '000'
         ws.cell(row=row, column=11).value = 'NO POSEE'
-        ws.cell(row=row, column=12).value = di.get('pais_fabricacion', di.get('pais_procedencia','212'))
+        ws.cell(row=row, column=12).value = item.get('pais_fabricacion', di.get('pais_fabricacion', di.get('pais_procedencia','212')))
         ws.cell(row=row, column=13).value = str(peso)
 
     ws['D35'] = 'CAPITAL FEDERAL'
@@ -693,6 +734,7 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
         items_procesados = []
         todas_alertas = di_alertas.copy()
         motor_idx = 0
+        paises_item_idx = 0
 
         for idx in range(st.session_state.n_items):
             tipo = tipos_seleccionados[idx]
@@ -733,9 +775,22 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
             if not dnrpa_datos.get('tipos',{}).get(tipo_key,{}).get('peso'):
                 todas_alertas.append(f"❌ No se encontró peso para {tipo} en DNRPA ítem {idx+1}.")
 
+            # País de fabricación/procedencia de ESTE ítem puntual: si el DI
+            # tiene varios ítems con posición 8408/8409 (motor + repuestos
+            # en el mismo despacho), cada ENGINE/BLOCK cargado toma el país
+            # del ítem del DI que le corresponde en orden, no un país
+            # "global" único para todo el despacho.
+            paises_item = di_datos.get('paises_por_item') or []
+            if paises_item_idx < len(paises_item):
+                pais_fab_item = paises_item[paises_item_idx]['fabricacion']
+                paises_item_idx += 1
+            else:
+                pais_fab_item = di_datos.get('pais_fabricacion', di_datos.get('pais_procedencia', '212'))
+
             items_procesados.append({
                 'tipo': tipo, 'dnrpa': dnrpa_datos,
                 'anio_fab': anio_fab, 'motor': motor,
+                'pais_fabricacion': pais_fab_item,
             })
 
         if n_engines > len(motores_factura):
