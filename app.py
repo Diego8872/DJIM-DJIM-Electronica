@@ -737,6 +737,18 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
         di_text = get_text_di(di_bytes, "di", dpi=150)
         di_datos, di_alertas = parsear_di(di_text)
 
+        # Si no se encontró año de fabricación y hay al menos un ENGINE
+        # cargado, es probable que el OCR a 150dpi haya perdido la etiqueta
+        # "ZA(NNNN)" (pasa en DIs 100% imagen donde esa zona del formulario
+        # tiene interferencia visual, ej. la marca de agua de fondo).
+        # Reintentamos UNA sola vez a mayor resolución antes de reportar error.
+        hay_engine = any(t == 'ENGINE' for t in tipos_seleccionados)
+        if hay_engine and not di_datos.get('anio_fab_di'):
+            di_text_hi = get_text_di(di_bytes, "di_hi", dpi=250)
+            di_datos_hi, di_alertas_hi = parsear_di(di_text_hi)
+            if di_datos_hi.get('anio_fab_di'):
+                di_datos, di_alertas = di_datos_hi, di_alertas_hi
+
         # Si el operador marca "Minería", el Código Régimen de Importación
         # pasa de "20" (el general) a "Z", tanto en el Excel como en el .txt.
         if es_mineria == "Sí":
