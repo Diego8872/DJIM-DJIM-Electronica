@@ -247,7 +247,14 @@ def parsear_di(text):
     datos['paises_por_item'] = []
     for m_item in re.finditer(r'\d{4}\s+N\s+(840[89]\.\d{2}\.\d{2}\.\d{3}[A-Z]?)', text_norm_upper):
         pos_after = m_item.end()
-        m_val = re.search(r'[\d.,]+\s+.+?(UNIDAD|KILOGRAMO)\s', text_norm_upper[pos_after:pos_after + 600])
+        # FIX: usar \d[\d.,]* (debe EMPEZAR con un dígito real) en vez de
+        # [\d.,]+, que también matcheaba el punto suelto de "Kg." en el
+        # encabezado de tabla "Total Kg. Neto Origen Pais / Provincia..."
+        # que a veces aparece ENTRE la línea del ítem y la línea real de
+        # países. Ese encabezado no tiene ningún país, así que el ítem
+        # quedaba vacío y el código caía al fallback global (que agarraba
+        # el país de OTRO ítem, no el del motor).
+        m_val = re.search(r'\d[\d.,]*\s+.+?(UNIDAD|KILOGRAMO)\s', text_norm_upper[pos_after:pos_after + 600])
         if not m_val:
             continue
         val_line = m_val.group(0)
@@ -701,6 +708,8 @@ with col2:
     if tiene_lcm == "Sí":
         lcm_valor = st.text_input("Número LCM", placeholder="ej: 39/12345/2025")
 
+es_mineria = st.radio("¿Minería?", ["No", "Sí"], horizontal=True)
+
 st.markdown("---")
 
 if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=True):
@@ -727,6 +736,11 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
         di_bytes = di_file.read()
         di_text = get_text_di(di_bytes, "di", dpi=150)
         di_datos, di_alertas = parsear_di(di_text)
+
+        # Si el operador marca "Minería", el Código Régimen de Importación
+        # pasa de "20" (el general) a "Z", tanto en el Excel como en el .txt.
+        if es_mineria == "Sí":
+            di_datos['regimen'] = 'Z'
 
         n_engines = sum(1 for t in tipos_seleccionados if t == 'ENGINE')
         motores_factura = parsear_facturas_streaming(fc_files, n_engines)
