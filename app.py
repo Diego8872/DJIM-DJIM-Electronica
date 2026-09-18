@@ -245,7 +245,15 @@ def parsear_di(text):
     # asigne a cada ENGINE/BLOCK cargado el país de su propio ítem del DI,
     # en vez de un único país "global" para todo el despacho.
     datos['paises_por_item'] = []
-    for m_item in re.finditer(r'\d{4}\s+N\s+(840[89]\.\d{2}\.\d{2}\.\d{3}[A-Z]?)', text_norm_upper):
+    # FIX (v3): antes se exigía que el número de ítem y "N" estuvieran
+    # PEGADOS a la posición arancelaria (ej: "0058 N 8409.99.12.100C"). En
+    # OCR a resoluciones más bajas, el layout de la tabla suele partir esto
+    # en líneas distintas (aparece "Posición SIM / Código AFIP" en el
+    # medio), así que ese ítem dejaba de reconocerse como motor/block por
+    # completo y el país terminaba saliendo de OTRO ítem. Ahora se busca
+    # directamente el patrón de posición 840[89] en cualquier parte del
+    # texto, sin exigir que esté pegado al número de ítem.
+    for m_item in re.finditer(r'840[89]\.\d{2}\.\d{2}\.\d{3}[A-Z]?', text_norm_upper):
         pos_after = m_item.end()
         # FIX (v2): antes se buscaba el renglón de países delimitándolo con
         # la palabra "UNIDAD" o "KILOGRAMO" como ancla de cierre. Eso falla
