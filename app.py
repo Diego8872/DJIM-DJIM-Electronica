@@ -247,20 +247,22 @@ def parsear_di(text):
     datos['paises_por_item'] = []
     for m_item in re.finditer(r'\d{4}\s+N\s+(840[89]\.\d{2}\.\d{2}\.\d{3}[A-Z]?)', text_norm_upper):
         pos_after = m_item.end()
-        # FIX: usar \d[\d.,]* (debe EMPEZAR con un dígito real) en vez de
-        # [\d.,]+, que también matcheaba el punto suelto de "Kg." en el
-        # encabezado de tabla "Total Kg. Neto Origen Pais / Provincia..."
-        # que a veces aparece ENTRE la línea del ítem y la línea real de
-        # países. Ese encabezado no tiene ningún país, así que el ítem
-        # quedaba vacío y el código caía al fallback global (que agarraba
-        # el país de OTRO ítem, no el del motor).
-        m_val = re.search(r'\d[\d.,]*\s+.+?(UNIDAD|KILOGRAMO)\s', text_norm_upper[pos_after:pos_after + 600])
-        if not m_val:
-            continue
-        val_line = m_val.group(0)
+        # FIX (v2): antes se buscaba el renglón de países delimitándolo con
+        # la palabra "UNIDAD" o "KILOGRAMO" como ancla de cierre. Eso falla
+        # cuando el OCR pierde esa palabra puntual en la fila de un ítem
+        # (pasa en documentos escaneados de baja calidad: el renglón
+        # "Total Kg. Neto Origen Pais... Pais de Procedencia..." puede
+        # salir incompleto, sin "Unidad/Estado"). Ahora se buscan los
+        # nombres de país DIRECTAMENTE en una ventana de texto después de
+        # la posición arancelaria del ítem, sin depender de esa palabra
+        # ancla. Si el OCR además se comió una de las dos repeticiones del
+        # país (pasa: a veces solo queda "ESTADOS UNIDOS" una vez en vez
+        # de dos), igual funciona: con un solo país encontrado se asume
+        # fabricación = procedencia (ya contemplado más abajo).
+        chunk = text_norm_upper[pos_after:pos_after + 400]
         encontrados = []  # (posicion, codigo)
         for pais, codigo in PAISES.items():
-            pos = val_line.find(pais)
+            pos = chunk.find(pais)
             if pos != -1:
                 encontrados.append((pos, codigo))
         encontrados.sort(key=lambda x: x[0])
