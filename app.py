@@ -148,6 +148,90 @@ def parsear_nro_despacho(text_upper):
     return None
 
 
+_STOPWORDS_PAIS = frozenset({'DE', 'DEL', 'LA', 'EL', 'LOS', 'LAS', 'Y'})
+
+
+def _palabras_significativas_pais(nombre):
+    limpio = re.sub(r'[^A-ZÑÁÉÍÓÚ]+', ' ', nombre.upper())
+    return [p for p in limpio.split() if p and p not in _STOPWORDS_PAIS]
+
+
+def extraer_codigos_pais(texto, PAISES, slack=2):
+    """
+    Busca nombres de país dentro de un fragmento de texto y devuelve una
+    lista (posición, código) ordenada por posición de aparición.
+
+    FIX (orden y puntuación): el nombre del país tal como aparece impreso
+    en el DI no siempre coincide textualmente con la clave de la tabla
+    (ej: el DI imprime "REP. FED DE ALEMANIA" pero la tabla tiene la
+    clave "ALEMANIA,REP.FED." — mismas palabras, orden y puntuación
+    distintos). Por eso NO se busca la clave tal cual como substring:
+    se comparan las palabras significativas de cada clave (ignorando
+    conectores como "DE") contra los tokens del texto, toleradas hasta
+    `slack` palabras sueltas intercaladas (ej: el "DE" del medio).
+
+    FIX (límite de palabra): al comparar por TOKENS completos (no
+    substrings), un país corto como "ARGENTINA" ya no puede matchear
+    dentro de una palabra más larga no relacionada como
+    "BANCOSARGENTINA" (un campo interno de opciones del DI) — antes sí
+    pasaba, y hacía que el país saliera completamente mal cuando el
+    nombre real no coincidía con ninguna clave (ver arriba) y la
+    búsqueda caía en ese falso positivo.
+
+    Cuando el mismo país aparece dos veces seguidas (lo normal: una vez
+    para "Origen País" y otra para "Procedencia"), cada aparición se
+    detecta por separado — el algoritmo corta la búsqueda de una
+    ocurrencia en cuanto encontraría una palabra ya usada por esa misma
+    ocurrencia, en vez de seguir de largo y devorar el comienzo de la
+    segunda aparición.
+    """
+    tokens = [(mm.group(0), mm.start()) for mm in re.finditer(r'[A-ZÑÁÉÍÓÚ]+', texto)]
+    n = len(tokens)
+    usados_tok = [False] * n
+    encontrados = []
+
+    claves = [(_palabras_significativas_pais(pais), codigo) for pais, codigo in PAISES.items()]
+    claves = [(p, c) for p, c in claves if p]
+    claves.sort(key=lambda t: -len(t[0]))  # nombres más específicos (más palabras) primero
+
+    for palabras, codigo in claves:
+        pset = set(palabras)
+        i = 0
+        while i < n:
+            if usados_tok[i] or tokens[i][0] not in pset:
+                i += 1
+                continue
+            faltan = set(pset)
+            grupo = []
+            fillers = 0
+            j = i
+            while j < n and faltan:
+                if usados_tok[j]:
+                    break
+                palabra = tokens[j][0]
+                if palabra in faltan:
+                    faltan.discard(palabra)
+                    grupo.append(j)
+                    j += 1
+                elif palabra in pset:
+                    break  # palabra repetida: es el comienzo de OTRA aparición
+                else:
+                    fillers += 1
+                    if fillers > slack:
+                        break
+                    j += 1
+            if not faltan:
+                for k in grupo:
+                    usados_tok[k] = True
+                encontrados.append((tokens[i][1], codigo))
+                i = grupo[-1] + 1
+            else:
+                i += 1
+
+    encontrados.sort(key=lambda x: x[0])
+    return encontrados
+
+
 def parsear_di(text):
     from paises import PAISES
     datos = {}
@@ -269,12 +353,7 @@ def parsear_di(text):
         # de dos), igual funciona: con un solo país encontrado se asume
         # fabricación = procedencia (ya contemplado más abajo).
         chunk = text_norm_upper[pos_after:pos_after + 400]
-        encontrados = []  # (posicion, codigo)
-        for pais, codigo in PAISES.items():
-            pos = chunk.find(pais)
-            if pos != -1:
-                encontrados.append((pos, codigo))
-        encontrados.sort(key=lambda x: x[0])
+        encontrados = extraer_codigos_pais(chunk, PAISES)
         codigos_ordenados = []
         for _, codigo in encontrados:
             if codigo not in codigos_ordenados:
@@ -305,12 +384,7 @@ def parsear_di(text):
             if 'ORIGEN' in line and ('PROCEDENCIA' in line or 'PAIS' in line):
                 if i + 1 < len(lines):
                     val_line = lines[i + 1].strip()
-                    encontrados = []
-                    for pais, codigo in PAISES.items():
-                        pos = val_line.find(pais)
-                        if pos != -1:
-                            encontrados.append((pos, codigo))
-                    encontrados.sort(key=lambda x: x[0])
+                    encontrados = extraer_codigos_pais(val_line, PAISES)
                     codigos_ordenados = []
                     for _, codigo in encontrados:
                         if codigo not in codigos_ordenados:
@@ -324,12 +398,11 @@ def parsear_di(text):
                     break
 
     if not datos['pais_procedencia']:
-        for pais, codigo in PAISES.items():
-            if pais in text_norm_upper:
-                datos['pais_procedencia'] = codigo
-                if not datos['pais_fabricacion']:
-                    datos['pais_fabricacion'] = codigo
-                break
+        _enc_fallback = extraer_codigos_pais(text_norm_upper, PAISES)
+        if _enc_fallback:
+            datos['pais_procedencia'] = _enc_fallback[0][1]
+            if not datos['pais_fabricacion']:
+                datos['pais_fabricacion'] = _enc_fallback[0][1]
 
     if not datos['pais_procedencia']:
         alertas.append("⚠️ No se encontró país de procedencia en el DI.")
@@ -598,12 +671,7 @@ def extraer_datos_por_posicion(text, PAISES, prefijos, ventana=500):
         pos_after = m_item.end()
         chunk = text_norm_upper[pos_after:pos_after + ventana]
 
-        encontrados = []
-        for pais, codigo in PAISES.items():
-            pos = chunk.find(pais)
-            if pos != -1:
-                encontrados.append((pos, codigo))
-        encontrados.sort(key=lambda x: x[0])
+        encontrados = extraer_codigos_pais(chunk, PAISES)
         codigos_ordenados = []
         for _, codigo in encontrados:
             if codigo not in codigos_ordenados:
