@@ -647,7 +647,7 @@ def parsear_dnrpa_html_generico(html_bytes, label=""):
 POSICIONES_CLIENTE_NUEVO = ('8427',)
 
 
-def extraer_datos_por_posicion(text, PAISES, prefijos, ventana=500):
+def extraer_datos_por_posicion(text, PAISES, prefijos, ventana=500, ventana_anio=2500):
     """
     Versión genérica (para clientes nuevos, no-Finning) de la búsqueda de
     país por ítem. Busca posiciones arancelarias que empiecen con
@@ -655,19 +655,26 @@ def extraer_datos_por_posicion(text, PAISES, prefijos, ventana=500):
     en cualquier parte del texto —sin exigir que estén pegadas al número
     de ítem, por la misma razón que en Finning: el OCR a veces separa eso
     en líneas distintas—. Por cada posición encontrada, además de país,
-    lee la Cantidad Unidades declarada en ese ítem y un fragmento de la
-    Declaración de la Mercadería (para detectar más adelante si dice
-    "motor eléctrico").
+    lee la Cantidad Unidades y el AÑO DE FABRICACIÓN declarados en ESE
+    ítem puntual (no un año único global para todo el despacho, como
+    hacía antes: cada ítem del DI puede traer un año distinto), y un
+    fragmento de la Declaración de la Mercadería (para detectar más
+    adelante si dice "motor eléctrico").
 
     Devuelve la lista YA EXPANDIDA según Cantidad Unidades: si un ítem del
     DI declara cantidad=2, esa entrada aparece 2 veces seguidas, para que
     se pueda repartir 1:1, en orden, con cada línea que el operador carga
-    en la app (una por unidad física).
+    en la app (una por unidad física). Cada entrada incluye 'item_di'
+    (1, 2, 3... según el orden de aparición de la posición en el DI, no
+    el número de ítem literal) para poder mostrarle al operador de qué
+    ítem del DI sale cada línea.
     """
     text_norm_upper = normalizar_ocr(text).upper()
     resultado = []
     pattern = r'(?:' + '|'.join(re.escape(p) for p in prefijos) + r')\.\d{2}\.\d{2}\.\d{3}[A-Z]?'
-    for m_item in re.finditer(pattern, text_norm_upper):
+    matches = list(re.finditer(pattern, text_norm_upper))
+    for idx_m, m_item in enumerate(matches):
+        n_item_di = idx_m + 1
         pos_after = m_item.end()
         chunk = text_norm_upper[pos_after:pos_after + ventana]
 
@@ -694,6 +701,22 @@ def extraer_datos_por_posicion(text, PAISES, prefijos, ventana=500):
         m_cant = re.search(r'\bUNIDAD(?:ES)?\b\s+(\d+),\d{2}', chunk)
         cantidad = int(m_cant.group(1)) if m_cant else 1
 
+        # Año de fabricación DE ESTE ÍTEM puntual (mismo mecanismo robusto
+        # que usa Finning vía "AÑO DE FABRICACION"). FIX: en PDFs con capa
+        # de texto real (no escaneados), pdfplumber a veces extrae el
+        # texto en un orden que NO respeta el orden visual de la página
+        # (columnas superpuestas) — la anotación "ZA(...)" puede terminar
+        # ANTES de la posición arancelaria en el texto extraído, aunque
+        # visualmente esté después. Por eso ya no se busca solo hacia
+        # adelante: se busca en toda la "zona" de este ítem, delimitada
+        # por el ítem anterior y el siguiente (o los bordes del texto si
+        # es el primero/último), así no se cruza a la zona de otro ítem.
+        zona_ini = matches[idx_m - 1].end() if idx_m > 0 else max(0, m_item.start() - ventana_anio)
+        zona_fin = matches[idx_m + 1].start() if idx_m + 1 < len(matches) else min(len(text_norm_upper), pos_after + ventana_anio)
+        zona_item = text_norm_upper[zona_ini:zona_fin]
+        m_anio = re.search(r'(\d+)\)\s*=\s*A[NÑ]O\s+DE\s+FABRICAC', zona_item)
+        anio_item = m_anio.group(1)[-4:] if m_anio else ''
+
         idx_decl = text_norm_upper.find('DECLARACION DE LA MERCADERIA', pos_after)
         declaracion = text_norm_upper[idx_decl:idx_decl + 500] if idx_decl != -1 else ''
         # FIX: el OCR a veces conserva la tilde ("ELÉCTRICO") y a veces la
@@ -705,7 +728,9 @@ def extraer_datos_por_posicion(text, PAISES, prefijos, ventana=500):
         for _ in range(max(cantidad, 1)):
             resultado.append({
                 'fabricacion': fabricacion, 'procedencia': procedencia,
+                'anio_fabricacion': anio_item,
                 'declaracion': declaracion, 'es_electrico': es_electrico,
+                'item_di': n_item_di,
             })
 
     return resultado
@@ -714,31 +739,43 @@ def extraer_datos_por_posicion(text, PAISES, prefijos, ventana=500):
 
 
 def parsear_facturas_streaming(fc_files, n_engines):
+    """
+    FIX: antes se tomaba CUALQUIER "UNIQUE ID" encontrado en la factura,
+    sin verificar que perteneciera a un ítem de motor. Si la factura
+    trae otras partes con número de serie propio (no motores), se podían
+    enganchar mal. Ahora se ancla en la palabra "ENGINE" de la
+    descripción del ítem, y se busca el "UNIQUE ID" que aparece
+    inmediatamente después de esa mención puntual — así, con varios
+    motores en la misma factura (o en varias), cada uno se empareja con
+    su propio número de serie en el orden en que aparecen los ítems
+    ENGINE, sin depender de qué otro "UNIQUE ID" ajeno pueda haber en el
+    documento.
+    """
     motores = []
     for fc_f in fc_files:
         if len(motores) >= n_engines:
             break
         fc_bytes = fc_f.read()
         text_total = extract_text_pdfplumber(fc_bytes)
-        if text_total and len(text_total.strip()) > 50:
-            for line in text_total.split('\n'):
-                uid = re.search(r'UNIQUE\s+ID[:\s]+([A-Z0-9]+)', line, re.IGNORECASE)
-                if uid and uid.group(1) not in motores:
-                    motores.append(uid.group(1))
-        else:
+        if not text_total or len(text_total.strip()) <= 50:
             try:
                 with pdfplumber.open(BytesIO(fc_bytes)) as pdf:
                     total_pages = len(pdf.pages)
             except:
                 total_pages = 0
+            texto_paginas = []
             for page_num in range(total_pages):
-                if len(motores) >= n_engines:
-                    break
-                page_text = ocr_pdf_bytes(fc_bytes, f"fc_p{page_num}", dpi=200)
-                for line in page_text.split('\n'):
-                    uid = re.search(r'UNIQUE\s+ID[:\s]+([A-Z0-9]+)', line, re.IGNORECASE)
-                    if uid and uid.group(1) not in motores:
-                        motores.append(uid.group(1))
+                texto_paginas.append(ocr_pdf_bytes(fc_bytes, f"fc_p{page_num}", dpi=200))
+            text_total = "\n".join(texto_paginas)
+
+        text_upper = text_total.upper()
+        for m in re.finditer(r'\bENGINE\b', text_upper):
+            if len(motores) >= n_engines:
+                break
+            ventana = text_upper[m.end():m.end() + 400]
+            uid = re.search(r'UNIQUE\s+ID[:\s]+([A-Z0-9]+)', ventana)
+            if uid and uid.group(1) not in motores:
+                motores.append(uid.group(1))
     return motores
 
 
@@ -957,22 +994,42 @@ else:
 
 # ── Vista previa del DI para clientes nuevos ──
 # Se parsea apenas se sube el archivo (no recién al tocar "Procesar y
-# Generar"), para poder mostrar al lado de cada ítem un fragmento de la
-# Declaración de la Mercadería y pre-seleccionar "Chasis" cuando dice
-# "motor eléctrico". Se cachea en session_state para no repetir el OCR en
-# cada rerun de Streamlit mientras se cargan los ítems.
+# Generar"), para poder auto-generar la cantidad correcta de ítems y
+# mostrar al lado de cada uno su país, año y un fragmento de la
+# Declaración de la Mercadería. Se cachea en session_state para no
+# repetir el OCR en cada rerun de Streamlit mientras se cargan los ítems.
 datos_items_cliente_nuevo = []
 if cliente != "Finning" and di_file is not None:
     di_key = f"{di_file.name}_{di_file.size}"
     if st.session_state.get('preview_di_key') != di_key:
         with st.spinner("Leyendo DI..."):
             di_bytes_preview = di_file.getvalue()
+            prefijos_preview = POSICIONES_POR_CLIENTE.get(cliente, ('8427',))
             di_text_preview = get_text_di(di_bytes_preview, "di_preview", dpi=150)
+            datos_preview = extraer_datos_por_posicion(di_text_preview, PAISES, prefijos_preview)
+
+            # Si algún ítem quedó sin año de fabricación, es probable que
+            # el OCR a 150dpi haya deformado la etiqueta "ZA(NNNN)" (pasa
+            # en DIs 100% imagen, ej: "ZA(" leído como "74("). Reintentamos
+            # UNA sola vez a mayor resolución antes de mostrarle nada al
+            # operador.
+            if any(not d.get('anio_fabricacion') for d in datos_preview):
+                di_text_preview_hi = get_text_di(di_bytes_preview, "di_preview_hi", dpi=250)
+                datos_preview_hi = extraer_datos_por_posicion(di_text_preview_hi, PAISES, prefijos_preview)
+                if len(datos_preview_hi) >= len(datos_preview) and all(
+                    d.get('anio_fabricacion') for d in datos_preview_hi
+                ):
+                    datos_preview = datos_preview_hi
+
             st.session_state['preview_di_key'] = di_key
-            st.session_state['preview_datos_items'] = extraer_datos_por_posicion(
-                di_text_preview, PAISES, POSICIONES_POR_CLIENTE.get(cliente, ('8427',))
-            )
+            st.session_state['preview_datos_items'] = datos_preview
+            # Auto-generar la cantidad de ítems detectada en el DI (una
+            # unidad física = una línea) — el operador puede seguir
+            # ajustando a mano con Agregar/Quitar si hace falta.
+            if datos_preview:
+                st.session_state.n_items = len(datos_preview)
     datos_items_cliente_nuevo = st.session_state.get('preview_datos_items', [])
+
 
 st.markdown('<p class="section-title">2 · Ítems de la DJIM</p>', unsafe_allow_html=True)
 if cliente == "Finning":
@@ -1019,21 +1076,33 @@ for idx in range(st.session_state.n_items):
         nros_chasis_manual.append("")
 
     else:
-        # Cliente nuevo (Coca-Cola, etc.): el operador elige qué datos
-        # tiene el equipo — motor, chasis, o ambos — y los tipea a mano.
-        # Se pre-selecciona "Chasis" si la Declaración de la Mercadería
-        # del ítem correspondiente del DI menciona "motor eléctrico"
-        # (el operador siempre puede cambiarlo).
+        # Cliente nuevo (Coca-Cola, etc.): país y año de fabricación
+        # salen del DI (ya no son editables acá — se leyeron correctamente
+        # por posición arancelaria y por ítem, más arriba); el operador
+        # solo elige qué datos tiene el equipo —motor, chasis, o ambos— y
+        # los tipea a mano. Se pre-selecciona "Chasis" si la Declaración
+        # de la Mercadería del ítem correspondiente del DI menciona
+        # "motor eléctrico" (el operador siempre puede cambiarlo).
         tipos_seleccionados.append("GENERICO")
         anios_block.append("")  # el año sale del DI para este cliente, no es manual
 
+        datos_di_item = datos_items_cliente_nuevo[idx] if idx < len(datos_items_cliente_nuevo) else None
+
         default_idx = 0  # "Motor y Chasis" por defecto
         opciones = ["Motor y Chasis", "Chasis", "Motor"]
-        if idx < len(datos_items_cliente_nuevo) and datos_items_cliente_nuevo[idx].get('es_electrico'):
+        if datos_di_item and datos_di_item.get('es_electrico'):
             default_idx = 1  # "Chasis"
 
         col1, col2 = st.columns([1, 2])
         with col1:
+            if datos_di_item:
+                st.caption(
+                    f"Del ítem N° {datos_di_item['item_di']} del DI — "
+                    f"País: {datos_di_item['fabricacion']} · "
+                    f"Año fabricación: {datos_di_item.get('anio_fabricacion') or '⚠️ no encontrado'}"
+                )
+            else:
+                st.caption("⚠️ Este ítem no coincide con ninguna unidad detectada en el DI — verificar a mano.")
             eleccion = st.selectbox(
                 "Datos disponibles", opciones, index=default_idx, key=f"tipo_cliente_nuevo_{idx}"
             )
@@ -1052,15 +1121,10 @@ for idx in range(st.session_state.n_items):
                 key=f"dnrpa_sel_{idx}",
             )
             dnrpa_files.append(dnrpa)
-            # No se muestra el fragmento crudo de la Declaración de la
-            # Mercadería: el DI trae esa columna al lado de "Opciones /
-            # Ventajas" y el OCR mezcla ambas al leer renglón por renglón,
-            # quedando ilegible. Se usa igual puertas adentro para la
-            # detección de "eléctrico" (pre-selección de arriba); acá solo
-            # se avisa el resultado de esa detección, de forma corta.
-            if idx < len(datos_items_cliente_nuevo) and datos_items_cliente_nuevo[idx].get('es_electrico'):
+            if datos_di_item and datos_di_item.get('es_electrico'):
                 st.caption("🔎 Se detectó \"motor eléctrico\" en este ítem del DI.")
     st.divider()
+
 
 st.markdown('<p class="section-title">3 · Datos adicionales</p>', unsafe_allow_html=True)
 col1, col2 = st.columns(2)
@@ -1209,21 +1273,29 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
 
         else:
             # ── Cliente nuevo (Coca-Cola, etc.): equipos con motor y/o
-            # chasis tipeados a mano, país por posición propia del cliente
-            # (ej: 8427), expandido según Cantidad Unidades del DI. ──
+            # chasis tipeados a mano, país Y AÑO por posición propia del
+            # cliente (ej: 8427), expandido según Cantidad Unidades del
+            # DI. Cada ítem del DI puede traer un país y un año distintos
+            # —no se usa un valor "global" único para todo el despacho—.
             prefijos_cliente = POSICIONES_POR_CLIENTE.get(cliente, ('8427',))
             datos_items = extraer_datos_por_posicion(di_text, PAISES, prefijos_cliente)
+
+            # Mismo reintento a mayor resolución que Finning, pero acá
+            # aplicado por ítem: si a alguno le falta el año, reintentamos
+            # el DI completo a 250dpi antes de reportar error.
+            if any(not d.get('anio_fabricacion') for d in datos_items):
+                di_text_hi_cn = get_text_di(di_bytes, "di_hi_cn", dpi=250)
+                datos_items_hi = extraer_datos_por_posicion(di_text_hi_cn, PAISES, prefijos_cliente)
+                if len(datos_items_hi) >= len(datos_items) and all(
+                    d.get('anio_fabricacion') for d in datos_items_hi
+                ):
+                    datos_items = datos_items_hi
+
             if not datos_items:
                 todas_alertas.append(
                     f"❌ No se encontró ninguna posición {prefijos_cliente[0]} en el DI — "
-                    f"cargar país de fabricación/procedencia manualmente y verificar."
+                    f"cargar país y año de fabricación manualmente y verificar."
                 )
-
-            # Año de fabricación: mismo mecanismo que Finning (ZA(...) del
-            # DI), se aplica a todas las unidades del despacho.
-            anio_fab_di = di_datos.get('anio_fab_di', '')
-            if not anio_fab_di:
-                todas_alertas.append("❌ No se encontró año de fabricación en el DI.")
 
             for idx in range(st.session_state.n_items):
                 dnrpa_bytes = dnrpa_files[idx].read()
@@ -1251,17 +1323,22 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
 
                 if idx < len(datos_items):
                     pais_fab_item = datos_items[idx]['fabricacion']
+                    anio_fab_item = datos_items[idx].get('anio_fabricacion', '')
+                    if not anio_fab_item:
+                        todas_alertas.append(
+                            f"❌ No se encontró año de fabricación en el DI para el ítem {idx+1}."
+                        )
                 else:
                     pais_fab_item = di_datos.get('pais_fabricacion', '')
-                    if not pais_fab_item:
-                        todas_alertas.append(
-                            f"⚠️ Ítem {idx+1}: no se pudo determinar el país de fabricación "
-                            f"automáticamente — cargar a mano y verificar el Excel/.txt."
-                        )
+                    anio_fab_item = ''
+                    todas_alertas.append(
+                        f"⚠️ Ítem {idx+1}: no coincide con ninguna unidad detectada en el DI "
+                        f"(cargaste más ítems de los que el DI declara) — verificar país y año a mano."
+                    )
 
                 items_procesados.append({
                     'tipo': 'GENERICO', 'dnrpa': dnrpa_datos,
-                    'anio_fab': anio_fab_di,
+                    'anio_fab': anio_fab_item,
                     'nro_motor': nros_motor_manual[idx],
                     'nro_chasis': nros_chasis_manual[idx],
                     'pais_fabricacion': pais_fab_item,
