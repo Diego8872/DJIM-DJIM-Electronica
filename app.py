@@ -7,6 +7,7 @@ import re
 import datetime
 from io import BytesIO
 from bs4 import BeautifulSoup
+from paises import PAISES
 
 st.set_page_config(page_title="DJIM / DJIM Electrónica", page_icon="📄", layout="centered")
 
@@ -337,8 +338,14 @@ def parsear_di(text):
 
     datos['regimen'] = '20'
 
-    m = re.search(r'ZA\(0*(\d{4})\)', text_norm)
-    datos['anio_fab_di'] = m.group(1) if m else ''
+    # FIX: en vez de exigir literalmente "ZA(NNNN)" (el OCR lee la Z y la A
+    # de formas muy distintas según el documento: a veces "Z.A(", a veces
+    # directamente "74" en lugar de "ZA"), se ancla en la frase "AÑO DE
+    # FABRICACION" —mucho más larga y difícil de leer mal que dos letras
+    # sueltas— y se toman los dígitos que la preceden, quedándose con los
+    # últimos 4 (el código siempre trae 2 ceros de relleno + el año).
+    m = re.search(r'(\d+)\)\s*=\s*A[NÑ]O\s+DE\s+FABRICAC', text_norm.upper())
+    datos['anio_fab_di'] = m.group(1)[-4:] if m else ''
 
     return datos, alertas
 
@@ -503,7 +510,126 @@ def parsear_dnrpa_html(html_bytes, label=""):
     return datos, alertas
 
 
-# ─── PARSEO FACTURA ───
+def parsear_dnrpa_html_generico(html_bytes, label=""):
+    """
+    Variante genérica del parser de DNRPA .htm para clientes cuyo equipo NO
+    se registra como MOTOR/BLOCK (ej: autoelevadoras — DNRPA código 37,
+    denominación "AUTOELEVADORA"). A diferencia de parsear_dnrpa_html
+    (Finning), acá NO se filtra por palabra clave en la denominación: se
+    toma la fila de "Tipos" tal cual venga, sea cual sea su denominación
+    (porque para este tipo de equipo la DNRPA no distingue motor/chasis —
+    es un solo registro para la máquina entera).
+    """
+    datos = {}
+    alertas = []
+
+    try:
+        html_text = html_bytes.decode('utf-8')
+    except UnicodeDecodeError:
+        html_text = html_bytes.decode('latin-1', errors='ignore')
+
+    soup = BeautifulSoup(html_text, 'html.parser')
+
+    filas_blancas = []
+    for table in soup.find_all('table'):
+        bgcolor = (table.get('bgcolor') or '').upper()
+        if bgcolor in ('#FFFFFF', '#FFF', 'WHITE'):
+            for fila in table.find_all('tr'):
+                celdas = [_clean_celda_html(td) for td in fila.find_all('td')]
+                celdas = [c for c in celdas if c]
+                if celdas:
+                    filas_blancas.append(celdas)
+
+    if filas_blancas and len(filas_blancas[0]) >= 2:
+        fila = filas_blancas[0]
+        datos['id_marca'] = fila[0]
+        datos['marca_desc'] = fila[1]
+        datos['id_modelo'] = fila[2] if len(fila) > 2 else ''
+        datos['cm_modelo'] = fila[3] if len(fila) > 3 else datos['id_modelo']
+    else:
+        alertas.append(f"❌ No se encontró marca/modelo en DNRPA {label} (HTML).")
+        datos['id_marca'] = ''
+        datos['id_modelo'] = ''
+
+    datos['tipo_generico'] = {}
+    if len(filas_blancas) >= 2:
+        fila = filas_blancas[1]
+        codigo = fila[0] if len(fila) > 0 else ''
+        denominacion = fila[1] if len(fila) > 1 else ''
+        peso_raw = fila[3] if len(fila) > 3 else (fila[2] if len(fila) > 2 else '')
+        peso_m = re.search(r'(\d[\d.,]*)', peso_raw)
+        peso = peso_m.group(1).replace('.', '').replace(',', '') if peso_m else ''
+        datos['tipo_generico'] = {'codigo': codigo, 'denominacion': denominacion, 'peso': peso}
+    else:
+        alertas.append(f"❌ No se encontró la fila de Tipo en DNRPA {label} (HTML).")
+
+    return datos, alertas
+
+
+# ─── CLIENTE NUEVO (autoelevadoras / equipos con chasis) ───
+
+# Posición SIM/AFIP para autoelevadoras/carretillas elevadoras. A diferencia
+# de Finning (motores, familia 8408/8409), acá la familia arancelaria es
+# 8427 (carretillas apiladoras y demás carretillas de manipulación).
+POSICIONES_CLIENTE_NUEVO = ('8427',)
+
+
+def extraer_datos_por_posicion(text, PAISES, prefijos, ventana=500):
+    """
+    Versión genérica (para clientes nuevos, no-Finning) de la búsqueda de
+    país por ítem. Busca posiciones arancelarias que empiecen con
+    cualquiera de los prefijos dados (ej: ('8427',) para autoelevadoras)
+    en cualquier parte del texto —sin exigir que estén pegadas al número
+    de ítem, por la misma razón que en Finning: el OCR a veces separa eso
+    en líneas distintas—. Por cada posición encontrada, además de país,
+    lee la Cantidad Unidades declarada en ese ítem y un fragmento de la
+    Declaración de la Mercadería (para detectar más adelante si dice
+    "motor eléctrico").
+
+    Devuelve la lista YA EXPANDIDA según Cantidad Unidades: si un ítem del
+    DI declara cantidad=2, esa entrada aparece 2 veces seguidas, para que
+    se pueda repartir 1:1, en orden, con cada línea que el operador carga
+    en la app (una por unidad física).
+    """
+    text_norm_upper = normalizar_ocr(text).upper()
+    resultado = []
+    pattern = r'(?:' + '|'.join(re.escape(p) for p in prefijos) + r')\.\d{2}\.\d{2}\.\d{3}[A-Z]?'
+    for m_item in re.finditer(pattern, text_norm_upper):
+        pos_after = m_item.end()
+        chunk = text_norm_upper[pos_after:pos_after + ventana]
+
+        encontrados = []
+        for pais, codigo in PAISES.items():
+            pos = chunk.find(pais)
+            if pos != -1:
+                encontrados.append((pos, codigo))
+        encontrados.sort(key=lambda x: x[0])
+        codigos_ordenados = []
+        for _, codigo in encontrados:
+            if codigo not in codigos_ordenados:
+                codigos_ordenados.append(codigo)
+        if not codigos_ordenados:
+            continue
+        fabricacion = codigos_ordenados[0]
+        procedencia = codigos_ordenados[1] if len(codigos_ordenados) >= 2 else codigos_ordenados[0]
+
+        m_cant = re.search(r'CANTIDAD UNIDADES\s*(?:ESTADISTICAS)?\s*\n?\s*(\d+),\d{2}', chunk)
+        cantidad = int(m_cant.group(1)) if m_cant else 1
+
+        idx_decl = text_norm_upper.find('DECLARACION DE LA MERCADERIA', pos_after)
+        declaracion = text_norm_upper[idx_decl:idx_decl + 500] if idx_decl != -1 else ''
+        es_electrico = 'ELECTRIC' in declaracion
+
+        for _ in range(max(cantidad, 1)):
+            resultado.append({
+                'fabricacion': fabricacion, 'procedencia': procedencia,
+                'declaracion': declaracion, 'es_electrico': es_electrico,
+            })
+
+    return resultado
+
+
+
 
 def parsear_facturas_streaming(fc_files, n_engines):
     motores = []
@@ -571,10 +697,24 @@ def generar_txt(di, items_procesados, lcm_valor):
     for i, item in enumerate(items_procesados, start=1):
         dnrpa = item['dnrpa']
         tipo = item['tipo']
-        tipo_key = 'MOTOR' if tipo == 'ENGINE' else 'BLOCK'
-        id_tipo = dnrpa.get('tipos',{}).get(tipo_key,{}).get('codigo','')
-        peso = dnrpa.get('tipos',{}).get(tipo_key,{}).get('peso','')
-        nro_motor = safe(item.get('motor','')) if tipo == 'ENGINE' else ''
+        if tipo in ('ENGINE', 'BLOCK'):
+            tipo_key = 'MOTOR' if tipo == 'ENGINE' else 'BLOCK'
+            id_tipo = dnrpa.get('tipos', {}).get(tipo_key, {}).get('codigo', '')
+            peso = dnrpa.get('tipos', {}).get(tipo_key, {}).get('peso', '')
+            nro_motor = safe(item.get('motor', '')) if tipo == 'ENGINE' else ''
+            marca_chasis = '000'
+            nro_chasis = 'NOPOSEE'
+        else:
+            # Cliente nuevo (equipo genérico: autoelevadora, etc.). Acá el
+            # número de motor y/o chasis los tipea el operador a mano (no
+            # hay factura tipo Caterpillar de la que sacarlos), y la marca
+            # chasis por defecto es la misma marca del equipo (DNRPA),
+            # salvo que el operador la haya indicado distinta.
+            id_tipo = dnrpa.get('tipo_generico', {}).get('codigo', '')
+            peso = dnrpa.get('tipo_generico', {}).get('peso', '')
+            nro_motor = safe(item.get('nro_motor', ''))
+            marca_chasis = item.get('marca_chasis') or dnrpa.get('id_marca', '000')
+            nro_chasis = safe(item.get('nro_chasis', '')) or 'NOPOSEE'
         anio = str(item['anio_fab'])
         linea = ";".join([
             q(id_aduana), q(nro_despacho), q("00"), q(str(i)),
@@ -582,7 +722,7 @@ def generar_txt(di, items_procesados, lcm_valor):
             q(lcm_tipo), q(lcm_nro), q(lcm_anio),
             q(anio), q(anio),
             q(dnrpa.get('id_marca','')), q(nro_motor),
-            q("000"), q("NOPOSEE"),
+            q(marca_chasis), q(nro_chasis),
             q(item.get('pais_fabricacion', di.get('pais_fabricacion', di.get('pais_procedencia','212')))),
             q(str(peso)), q("N")
         ])
@@ -622,10 +762,21 @@ def generar_excel(di, items_procesados, lcm_valor):
         row = 16 + i
         dnrpa = item['dnrpa']
         tipo = item['tipo']
-        tipo_key = 'MOTOR' if tipo == 'ENGINE' else 'BLOCK'
-        id_tipo = dnrpa.get('tipos',{}).get(tipo_key,{}).get('codigo','')
-        peso = dnrpa.get('tipos',{}).get(tipo_key,{}).get('peso','')
-        nro_motor = item.get('motor','') if tipo == 'ENGINE' else ''
+        if tipo in ('ENGINE', 'BLOCK'):
+            tipo_key = 'MOTOR' if tipo == 'ENGINE' else 'BLOCK'
+            id_tipo = dnrpa.get('tipos', {}).get(tipo_key, {}).get('codigo', '')
+            peso = dnrpa.get('tipos', {}).get(tipo_key, {}).get('peso', '')
+            nro_motor = item.get('motor', '') if tipo == 'ENGINE' else ''
+            marca_chasis = '000'
+            nro_chasis = 'NO POSEE'
+        else:
+            # Cliente nuevo: número de motor/chasis tipeados a mano por el
+            # operador; marca chasis por defecto = marca del equipo (DNRPA).
+            id_tipo = dnrpa.get('tipo_generico', {}).get('codigo', '')
+            peso = dnrpa.get('tipo_generico', {}).get('peso', '')
+            nro_motor = item.get('nro_motor', '')
+            marca_chasis = item.get('marca_chasis') or dnrpa.get('id_marca', '000')
+            nro_chasis = item.get('nro_chasis') or 'NO POSEE'
         anio = str(item['anio_fab'])
 
         ws.cell(row=row, column=1).value = i + 1
@@ -637,8 +788,8 @@ def generar_excel(di, items_procesados, lcm_valor):
         ws.cell(row=row, column=7).value = anio
         ws.cell(row=row, column=8).value = dnrpa.get('id_marca','')
         ws.cell(row=row, column=9).value = nro_motor
-        ws.cell(row=row, column=10).value = '000'
-        ws.cell(row=row, column=11).value = 'NO POSEE'
+        ws.cell(row=row, column=10).value = marca_chasis
+        ws.cell(row=row, column=11).value = nro_chasis
         ws.cell(row=row, column=12).value = item.get('pais_fabricacion', di.get('pais_fabricacion', di.get('pais_procedencia','212')))
         ws.cell(row=row, column=13).value = str(peso)
 
@@ -666,15 +817,56 @@ def generar_excel(di, items_procesados, lcm_valor):
 # INTERFAZ
 # ═══════════════════════════════════════════════
 
+st.markdown('<p class="section-title">0 · Cliente</p>', unsafe_allow_html=True)
+cliente = st.radio("Cliente", ["Finning", "Coca-Cola"], horizontal=True)
+
+# Nombre fijo del importador y posiciones arancelarias propias de cada
+# cliente nuevo (no-Finning). Se suman acá a medida que se incorporan más
+# clientes, sin tocar la lógica de Finning.
+IMPORTADOR_FIJO = {
+    "Coca-Cola": "SERVICIOS Y PRODUCTOS PARA BEBIDAS REFRESCANTES S.R.L.",
+}
+POSICIONES_POR_CLIENTE = {
+    "Coca-Cola": POSICIONES_CLIENTE_NUEVO,  # ('8427',) — autoelevadoras
+}
+
 st.markdown('<p class="section-title">1 · Documentos generales</p>', unsafe_allow_html=True)
-col1, col2 = st.columns(2)
-with col1:
+if cliente == "Finning":
+    col1, col2 = st.columns(2)
+    with col1:
+        di_file = st.file_uploader("📋 DI (PDF)", type="pdf")
+    with col2:
+        fc_files = st.file_uploader("🧾 Factura/s (PDF)", type="pdf", accept_multiple_files=True)
+else:
+    # Clientes nuevos: solo el DI. No hay factura de la que sacar números
+    # de motor (se tipean a mano por ítem, más abajo).
     di_file = st.file_uploader("📋 DI (PDF)", type="pdf")
-with col2:
-    fc_files = st.file_uploader("🧾 Factura/s (PDF)", type="pdf", accept_multiple_files=True)
+    fc_files = []
+
+# ── Vista previa del DI para clientes nuevos ──
+# Se parsea apenas se sube el archivo (no recién al tocar "Procesar y
+# Generar"), para poder mostrar al lado de cada ítem un fragmento de la
+# Declaración de la Mercadería y pre-seleccionar "Chasis" cuando dice
+# "motor eléctrico". Se cachea en session_state para no repetir el OCR en
+# cada rerun de Streamlit mientras se cargan los ítems.
+datos_items_cliente_nuevo = []
+if cliente != "Finning" and di_file is not None:
+    di_key = f"{di_file.name}_{di_file.size}"
+    if st.session_state.get('preview_di_key') != di_key:
+        with st.spinner("Leyendo DI..."):
+            di_bytes_preview = di_file.getvalue()
+            di_text_preview = get_text_di(di_bytes_preview, "di_preview", dpi=150)
+            st.session_state['preview_di_key'] = di_key
+            st.session_state['preview_datos_items'] = extraer_datos_por_posicion(
+                di_text_preview, PAISES, POSICIONES_POR_CLIENTE.get(cliente, ('8427',))
+            )
+    datos_items_cliente_nuevo = st.session_state.get('preview_datos_items', [])
 
 st.markdown('<p class="section-title">2 · Ítems de la DJIM</p>', unsafe_allow_html=True)
-st.caption("Agregá un ítem por cada motor o block del despacho.")
+if cliente == "Finning":
+    st.caption("Agregá un ítem por cada motor o block del despacho.")
+else:
+    st.caption("Agregá un ítem por cada unidad física del despacho.")
 
 col_add, col_rem = st.columns([1, 1])
 with col_add:
@@ -688,25 +880,69 @@ with col_rem:
 tipos_seleccionados = []
 dnrpa_files = []
 anios_block = []
+nros_motor_manual = []
+nros_chasis_manual = []
 
 for idx in range(st.session_state.n_items):
     st.markdown(f"**Ítem {idx+1}**")
-    col1, col2 = st.columns([1, 2])
-    with col1:
-        tipo = st.selectbox("Tipo", ["ENGINE", "BLOCK"], key=f"tipo_sel_{idx}")
-        tipos_seleccionados.append(tipo)
-        if tipo == "BLOCK":
-            anio = st.text_input("Año fabricación", key=f"anio_sel_{idx}", placeholder="ej: 2025")
-            anios_block.append(anio)
-        else:
-            anios_block.append("")
-    with col2:
-        dnrpa = st.file_uploader(
-            "DNRPA (.htm recomendado, o PDF)",
-            type=["htm", "html", "pdf"],
-            key=f"dnrpa_sel_{idx}",
-        )
-        dnrpa_files.append(dnrpa)
+
+    if cliente == "Finning":
+        col1, col2 = st.columns([1, 2])
+        with col1:
+            tipo = st.selectbox("Tipo", ["ENGINE", "BLOCK"], key=f"tipo_sel_{idx}")
+            tipos_seleccionados.append(tipo)
+            if tipo == "BLOCK":
+                anio = st.text_input("Año fabricación", key=f"anio_sel_{idx}", placeholder="ej: 2025")
+                anios_block.append(anio)
+            else:
+                anios_block.append("")
+        with col2:
+            dnrpa = st.file_uploader(
+                "DNRPA (.htm recomendado, o PDF)",
+                type=["htm", "html", "pdf"],
+                key=f"dnrpa_sel_{idx}",
+            )
+            dnrpa_files.append(dnrpa)
+        nros_motor_manual.append("")
+        nros_chasis_manual.append("")
+
+    else:
+        # Cliente nuevo (Coca-Cola, etc.): el operador elige qué datos
+        # tiene el equipo — motor, chasis, o ambos — y los tipea a mano.
+        # Se pre-selecciona "Chasis" si la Declaración de la Mercadería
+        # del ítem correspondiente del DI menciona "motor eléctrico"
+        # (el operador siempre puede cambiarlo).
+        tipos_seleccionados.append("GENERICO")
+        anios_block.append("")  # el año sale del DI para este cliente, no es manual
+
+        default_idx = 0  # "Motor y Chasis" por defecto
+        opciones = ["Motor y Chasis", "Chasis", "Motor"]
+        if idx < len(datos_items_cliente_nuevo) and datos_items_cliente_nuevo[idx].get('es_electrico'):
+            default_idx = 1  # "Chasis"
+
+        col1, col2 = st.columns([1, 2])
+        with col1:
+            eleccion = st.selectbox(
+                "Datos disponibles", opciones, index=default_idx, key=f"tipo_cliente_nuevo_{idx}"
+            )
+            nro_motor_val = ""
+            nro_chasis_val = ""
+            if eleccion in ("Motor", "Motor y Chasis"):
+                nro_motor_val = st.text_input("Número de motor", key=f"nro_motor_{idx}")
+            if eleccion in ("Chasis", "Motor y Chasis"):
+                nro_chasis_val = st.text_input("Número de chasis", key=f"nro_chasis_{idx}")
+            nros_motor_manual.append(nro_motor_val)
+            nros_chasis_manual.append(nro_chasis_val)
+        with col2:
+            dnrpa = st.file_uploader(
+                "DNRPA (.htm recomendado, o PDF)",
+                type=["htm", "html", "pdf"],
+                key=f"dnrpa_sel_{idx}",
+            )
+            dnrpa_files.append(dnrpa)
+            if idx < len(datos_items_cliente_nuevo) and datos_items_cliente_nuevo[idx].get('declaracion'):
+                texto_decl = datos_items_cliente_nuevo[idx]['declaracion'][:280].strip().title()
+                st.caption(f"📄 Declaración de mercadería (DI): {texto_decl}…")
     st.divider()
 
 st.markdown('<p class="section-title">3 · Datos adicionales</p>', unsafe_allow_html=True)
@@ -718,7 +954,11 @@ with col2:
     if tiene_lcm == "Sí":
         lcm_valor = st.text_input("Número LCM", placeholder="ej: 39/12345/2025")
 
-es_mineria = st.radio("¿Minería?", ["No", "Sí"], horizontal=True)
+if cliente == "Finning":
+    es_mineria = st.radio("¿Minería?", ["No", "Sí"], horizontal=True)
+else:
+    # No aplica para este cliente: el Régimen de Importación es siempre "20".
+    es_mineria = "No"
 
 st.markdown("---")
 
@@ -727,15 +967,17 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
     errores = []
     if not di_file:
         errores.append("❌ Faltá subir el DI.")
-    if not fc_files:
+    if cliente == "Finning" and not fc_files:
         errores.append("❌ Faltá subir al menos una factura.")
     if st.session_state.n_items == 0:
         errores.append("❌ Agregá al menos un ítem.")
     for idx in range(st.session_state.n_items):
         if not dnrpa_files[idx]:
             errores.append(f"❌ Faltá el DNRPA del ítem {idx+1}.")
-        if tipos_seleccionados[idx] == 'BLOCK' and not anios_block[idx].strip():
+        if cliente == "Finning" and tipos_seleccionados[idx] == 'BLOCK' and not anios_block[idx].strip():
             errores.append(f"❌ Ingresá el año de fabricación del ítem {idx+1} (BLOCK).")
+        if cliente != "Finning" and not nros_motor_manual[idx].strip() and not nros_chasis_manual[idx].strip():
+            errores.append(f"❌ Ingresá número de motor y/o de chasis para el ítem {idx+1}.")
 
     if errores:
         for e in errores:
@@ -748,92 +990,171 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
         di_datos, di_alertas = parsear_di(di_text)
 
         # Si no se encontró año de fabricación y hay al menos un ENGINE
-        # cargado, es probable que el OCR a 150dpi haya perdido la etiqueta
-        # "ZA(NNNN)" (pasa en DIs 100% imagen donde esa zona del formulario
-        # tiene interferencia visual, ej. la marca de agua de fondo).
-        # Reintentamos UNA sola vez a mayor resolución antes de reportar error.
+        # cargado (Finning) o el cliente es uno nuevo (siempre necesita año
+        # de fabricación del DI), es probable que el OCR a 150dpi haya
+        # perdido la etiqueta "ZA(NNNN)" (pasa en DIs 100% imagen donde esa
+        # zona del formulario tiene interferencia visual, ej. la marca de
+        # agua de fondo). Reintentamos UNA sola vez a mayor resolución
+        # antes de reportar error.
         hay_engine = any(t == 'ENGINE' for t in tipos_seleccionados)
-        if hay_engine and not di_datos.get('anio_fab_di'):
+        necesita_anio_di = hay_engine or cliente != "Finning"
+        if necesita_anio_di and not di_datos.get('anio_fab_di'):
             di_text_hi = get_text_di(di_bytes, "di_hi", dpi=250)
             di_datos_hi, di_alertas_hi = parsear_di(di_text_hi)
             if di_datos_hi.get('anio_fab_di'):
                 di_datos, di_alertas = di_datos_hi, di_alertas_hi
+                di_text = di_text_hi
 
-        # Si el operador marca "Minería", el Código Régimen de Importación
-        # pasa de "20" (el general) a "Z", tanto en el Excel como en el .txt.
+        # Si el operador marca "Minería" (solo Finning), el Código Régimen
+        # de Importación pasa de "20" (el general) a "Z", tanto en el
+        # Excel como en el .txt.
         if es_mineria == "Sí":
             di_datos['regimen'] = 'Z'
 
-        n_engines = sum(1 for t in tipos_seleccionados if t == 'ENGINE')
-        motores_factura = parsear_facturas_streaming(fc_files, n_engines)
+        # Clientes nuevos: nombre de importador fijo (no se infiere del DI,
+        # que suele venir recortado/con errores de OCR) y régimen siempre "20".
+        if cliente in IMPORTADOR_FIJO:
+            di_datos['importador'] = IMPORTADOR_FIJO[cliente]
+            di_datos['regimen'] = '20'
 
         items_procesados = []
         todas_alertas = di_alertas.copy()
-        motor_idx = 0
-        paises_item_idx = 0
 
-        for idx in range(st.session_state.n_items):
-            tipo = tipos_seleccionados[idx]
-            tipo_key = 'MOTOR' if tipo == 'ENGINE' else 'BLOCK'
+        if cliente == "Finning":
+            n_engines = sum(1 for t in tipos_seleccionados if t == 'ENGINE')
+            motores_factura = parsear_facturas_streaming(fc_files, n_engines)
 
-            dnrpa_bytes = dnrpa_files[idx].read()
-            dnrpa_nombre = (dnrpa_files[idx].name or "").lower()
+            motor_idx = 0
+            paises_item_idx = 0
 
-            if dnrpa_nombre.endswith(".htm") or dnrpa_nombre.endswith(".html"):
-                # Camino preferido: el HTML de la consulta DNRPA trae el dato
-                # como texto real, sin depender de OCR.
-                dnrpa_datos, dnrpa_alertas = parsear_dnrpa_html(dnrpa_bytes, f"ítem {idx+1}")
-            else:
-                # Fallback para capturas/PDF viejos: psm=6 + upscale=3 porque
-                # el DNRPA en PDF suele ser una captura de pantalla de baja
-                # resolución; agrandamos la imagen y forzamos modo de
-                # segmentación de bloque uniforme para mejorar el OCR.
-                dnrpa_text = get_text(dnrpa_bytes, f"dnrpa_{idx}", dpi=250, psm=6, upscale=3)
-                dnrpa_datos, dnrpa_alertas = parsear_dnrpa(dnrpa_text, f"ítem {idx+1}")
+            for idx in range(st.session_state.n_items):
+                tipo = tipos_seleccionados[idx]
+                tipo_key = 'MOTOR' if tipo == 'ENGINE' else 'BLOCK'
 
-            todas_alertas.extend(dnrpa_alertas)
+                dnrpa_bytes = dnrpa_files[idx].read()
+                dnrpa_nombre = (dnrpa_files[idx].name or "").lower()
 
-            if tipo == 'ENGINE':
-                anio_fab = di_datos.get('anio_fab_di', '')
-                if not anio_fab:
-                    todas_alertas.append(f"❌ No se encontró año de fabricación en el DI para ENGINE ítem {idx+1}.")
-            else:
-                anio_fab = anios_block[idx]
-
-            motor = ''
-            if tipo == 'ENGINE':
-                if motor_idx < len(motores_factura):
-                    motor = motores_factura[motor_idx]
-                    motor_idx += 1
+                if dnrpa_nombre.endswith(".htm") or dnrpa_nombre.endswith(".html"):
+                    # Camino preferido: el HTML de la consulta DNRPA trae el dato
+                    # como texto real, sin depender de OCR.
+                    dnrpa_datos, dnrpa_alertas = parsear_dnrpa_html(dnrpa_bytes, f"ítem {idx+1}")
                 else:
-                    todas_alertas.append(f"⚠️ No se encontró UNIQUE ID para ENGINE ítem {idx+1}.")
+                    # Fallback para capturas/PDF viejos: psm=6 + upscale=3 porque
+                    # el DNRPA en PDF suele ser una captura de pantalla de baja
+                    # resolución; agrandamos la imagen y forzamos modo de
+                    # segmentación de bloque uniforme para mejorar el OCR.
+                    dnrpa_text = get_text(dnrpa_bytes, f"dnrpa_{idx}", dpi=250, psm=6, upscale=3)
+                    dnrpa_datos, dnrpa_alertas = parsear_dnrpa(dnrpa_text, f"ítem {idx+1}")
 
-            if not dnrpa_datos.get('tipos',{}).get(tipo_key,{}).get('peso'):
-                todas_alertas.append(f"❌ No se encontró peso para {tipo} en DNRPA ítem {idx+1}.")
+                todas_alertas.extend(dnrpa_alertas)
 
-            # País de fabricación/procedencia de ESTE ítem puntual: si el DI
-            # tiene varios ítems con posición 8408/8409 (motor + repuestos
-            # en el mismo despacho), cada ENGINE/BLOCK cargado toma el país
-            # del ítem del DI que le corresponde en orden, no un país
-            # "global" único para todo el despacho.
-            paises_item = di_datos.get('paises_por_item') or []
-            if paises_item_idx < len(paises_item):
-                pais_fab_item = paises_item[paises_item_idx]['fabricacion']
-                paises_item_idx += 1
-            else:
-                pais_fab_item = di_datos.get('pais_fabricacion', di_datos.get('pais_procedencia', '212'))
+                if tipo == 'ENGINE':
+                    anio_fab = di_datos.get('anio_fab_di', '')
+                    if not anio_fab:
+                        todas_alertas.append(f"❌ No se encontró año de fabricación en el DI para ENGINE ítem {idx+1}.")
+                else:
+                    anio_fab = anios_block[idx]
 
-            items_procesados.append({
-                'tipo': tipo, 'dnrpa': dnrpa_datos,
-                'anio_fab': anio_fab, 'motor': motor,
-                'pais_fabricacion': pais_fab_item,
-            })
+                motor = ''
+                if tipo == 'ENGINE':
+                    if motor_idx < len(motores_factura):
+                        motor = motores_factura[motor_idx]
+                        motor_idx += 1
+                    else:
+                        todas_alertas.append(f"⚠️ No se encontró UNIQUE ID para ENGINE ítem {idx+1}.")
 
-        if n_engines > len(motores_factura):
-            todas_alertas.append(
-                f"⚠️ Se declararon {n_engines} ENGINE(s) pero se encontraron "
-                f"solo {len(motores_factura)} UNIQUE ID(s). Verificar manualmente."
-            )
+                if not dnrpa_datos.get('tipos',{}).get(tipo_key,{}).get('peso'):
+                    todas_alertas.append(f"❌ No se encontró peso para {tipo} en DNRPA ítem {idx+1}.")
+
+                # País de fabricación/procedencia de ESTE ítem puntual: si el DI
+                # tiene varios ítems con posición 8408/8409 (motor + repuestos
+                # en el mismo despacho), cada ENGINE/BLOCK cargado toma el país
+                # del ítem del DI que le corresponde en orden, no un país
+                # "global" único para todo el despacho.
+                paises_item = di_datos.get('paises_por_item') or []
+                if paises_item_idx < len(paises_item):
+                    pais_fab_item = paises_item[paises_item_idx]['fabricacion']
+                    paises_item_idx += 1
+                else:
+                    pais_fab_item = di_datos.get('pais_fabricacion', di_datos.get('pais_procedencia', '212'))
+
+                items_procesados.append({
+                    'tipo': tipo, 'dnrpa': dnrpa_datos,
+                    'anio_fab': anio_fab, 'motor': motor,
+                    'pais_fabricacion': pais_fab_item,
+                })
+
+            if n_engines > len(motores_factura):
+                todas_alertas.append(
+                    f"⚠️ Se declararon {n_engines} ENGINE(s) pero se encontraron "
+                    f"solo {len(motores_factura)} UNIQUE ID(s). Verificar manualmente."
+                )
+
+        else:
+            # ── Cliente nuevo (Coca-Cola, etc.): equipos con motor y/o
+            # chasis tipeados a mano, país por posición propia del cliente
+            # (ej: 8427), expandido según Cantidad Unidades del DI. ──
+            prefijos_cliente = POSICIONES_POR_CLIENTE.get(cliente, ('8427',))
+            datos_items = extraer_datos_por_posicion(di_text, PAISES, prefijos_cliente)
+            if not datos_items:
+                todas_alertas.append(
+                    f"❌ No se encontró ninguna posición {prefijos_cliente[0]} en el DI — "
+                    f"cargar país de fabricación/procedencia manualmente y verificar."
+                )
+
+            # Año de fabricación: mismo mecanismo que Finning (ZA(...) del
+            # DI), se aplica a todas las unidades del despacho.
+            anio_fab_di = di_datos.get('anio_fab_di', '')
+            if not anio_fab_di:
+                todas_alertas.append("❌ No se encontró año de fabricación en el DI.")
+
+            for idx in range(st.session_state.n_items):
+                dnrpa_bytes = dnrpa_files[idx].read()
+                dnrpa_nombre = (dnrpa_files[idx].name or "").lower()
+
+                if dnrpa_nombre.endswith(".htm") or dnrpa_nombre.endswith(".html"):
+                    dnrpa_datos, dnrpa_alertas = parsear_dnrpa_html_generico(dnrpa_bytes, f"ítem {idx+1}")
+                else:
+                    # Fallback en PDF/captura: reutiliza el parseo de
+                    # marca/modelo genérico, pero no puede confirmar el
+                    # código de tipo/peso sin la palabra MOTOR/BLOCK —
+                    # se avisa para que se cargue a mano.
+                    dnrpa_text = get_text(dnrpa_bytes, f"dnrpa_{idx}", dpi=250, psm=6, upscale=3)
+                    dnrpa_datos, dnrpa_alertas = parsear_dnrpa(dnrpa_text, f"ítem {idx+1}")
+                    dnrpa_datos['tipo_generico'] = {}
+                    dnrpa_alertas.append(
+                        f"⚠️ DNRPA ítem {idx+1} en PDF: no se pudo leer el código de tipo ni el "
+                        f"peso automáticamente (subí el .htm de la consulta si es posible)."
+                    )
+
+                todas_alertas.extend(dnrpa_alertas)
+
+                if not dnrpa_datos.get('tipo_generico', {}).get('peso'):
+                    todas_alertas.append(f"❌ No se encontró peso en DNRPA ítem {idx+1}.")
+
+                if idx < len(datos_items):
+                    pais_fab_item = datos_items[idx]['fabricacion']
+                else:
+                    pais_fab_item = di_datos.get('pais_fabricacion', '')
+                    if not pais_fab_item:
+                        todas_alertas.append(
+                            f"⚠️ Ítem {idx+1}: no se pudo determinar el país de fabricación "
+                            f"automáticamente — cargar a mano y verificar el Excel/.txt."
+                        )
+
+                items_procesados.append({
+                    'tipo': 'GENERICO', 'dnrpa': dnrpa_datos,
+                    'anio_fab': anio_fab_di,
+                    'nro_motor': nros_motor_manual[idx],
+                    'nro_chasis': nros_chasis_manual[idx],
+                    'pais_fabricacion': pais_fab_item,
+                })
+
+            if len(datos_items) not in (0, st.session_state.n_items):
+                todas_alertas.append(
+                    f"⚠️ El DI declara {len(datos_items)} unidad(es) (según Cantidad Unidades) "
+                    f"pero cargaste {st.session_state.n_items} ítem(s). Verificar que coincida."
+                )
 
         st.session_state['resultado_txt'] = generar_txt(di_datos, items_procesados, lcm_valor)
         if os.path.exists(TEMPLATE_PATH):
@@ -861,9 +1182,11 @@ if st.button("⚙️ Procesar y Generar", type="primary", use_container_width=Tr
             st.json({
                 'id_marca': item['dnrpa'].get('id_marca'),
                 'id_modelo': item['dnrpa'].get('id_modelo'),
-                'tipos': item['dnrpa'].get('tipos'),
+                'tipos': item['dnrpa'].get('tipos') or item['dnrpa'].get('tipo_generico'),
                 'anio_fab': item['anio_fab'],
-                'motor': item.get('motor',''),
+                'motor': item.get('motor', item.get('nro_motor', '')),
+                'chasis': item.get('nro_chasis', ''),
+                'pais_fabricacion': item.get('pais_fabricacion', ''),
             })
 
 # ── DESCARGAS PERSISTENTES ──
