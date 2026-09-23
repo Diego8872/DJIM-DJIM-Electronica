@@ -716,26 +716,41 @@ def generar_txt(di, items_procesados, lcm_valor):
             id_tipo = dnrpa.get('tipos', {}).get(tipo_key, {}).get('codigo', '')
             peso = dnrpa.get('tipos', {}).get(tipo_key, {}).get('peso', '')
             nro_motor = safe(item.get('motor', '')) if tipo == 'ENGINE' else ''
+            marca_motor = dnrpa.get('id_marca', '')
             marca_chasis = '000'
             nro_chasis = 'NOPOSEE'
         else:
-            # Cliente nuevo (equipo genérico: autoelevadora, etc.). Acá el
-            # número de motor y/o chasis los tipea el operador a mano (no
-            # hay factura tipo Caterpillar de la que sacarlos), y la marca
-            # chasis por defecto es la misma marca del equipo (DNRPA),
-            # salvo que el operador la haya indicado distinta.
+            # Cliente nuevo (equipo genérico: autoelevadora, etc.). El
+            # número de motor y/o chasis los tipea el operador a mano. Si
+            # el ítem no tiene motor (o no se cargó su número), la marca
+            # motor queda vacía y el número pasa a "NOPOSEE" —mismo
+            # criterio que ya usa Finning para lo que no aplica—, y
+            # simétricamente para chasis. La marca, cuando sí corresponde,
+            # es la misma marca del equipo (DNRPA), salvo que el operador
+            # la haya indicado distinta.
             id_tipo = dnrpa.get('tipo_generico', {}).get('codigo', '')
             peso = dnrpa.get('tipo_generico', {}).get('peso', '')
-            nro_motor = safe(item.get('nro_motor', ''))
-            marca_chasis = item.get('marca_chasis') or dnrpa.get('id_marca', '000')
-            nro_chasis = safe(item.get('nro_chasis', '')) or 'NOPOSEE'
+            nro_motor_raw = safe(item.get('nro_motor', ''))
+            if nro_motor_raw:
+                marca_motor = dnrpa.get('id_marca', '')
+                nro_motor = nro_motor_raw
+            else:
+                marca_motor = ''
+                nro_motor = 'NOPOSEE'
+            nro_chasis_raw = safe(item.get('nro_chasis', ''))
+            if nro_chasis_raw:
+                marca_chasis = item.get('marca_chasis') or dnrpa.get('id_marca', '')
+                nro_chasis = nro_chasis_raw
+            else:
+                marca_chasis = '000'
+                nro_chasis = 'NOPOSEE'
         anio = str(item['anio_fab'])
         linea = ";".join([
             q(id_aduana), q(nro_despacho), q("00"), q(str(i)),
             q(dnrpa.get('id_marca','')), q(id_tipo), q(dnrpa.get('id_modelo','')),
             q(lcm_tipo), q(lcm_nro), q(lcm_anio),
             q(anio), q(anio),
-            q(dnrpa.get('id_marca','')), q(nro_motor),
+            q(marca_motor), q(nro_motor),
             q(marca_chasis), q(nro_chasis),
             q(item.get('pais_fabricacion', di.get('pais_fabricacion', di.get('pais_procedencia','212')))),
             q(str(peso)), q("N")
@@ -781,16 +796,31 @@ def generar_excel(di, items_procesados, lcm_valor):
             id_tipo = dnrpa.get('tipos', {}).get(tipo_key, {}).get('codigo', '')
             peso = dnrpa.get('tipos', {}).get(tipo_key, {}).get('peso', '')
             nro_motor = item.get('motor', '') if tipo == 'ENGINE' else ''
+            marca_motor = dnrpa.get('id_marca', '')
             marca_chasis = '000'
             nro_chasis = 'NO POSEE'
         else:
             # Cliente nuevo: número de motor/chasis tipeados a mano por el
-            # operador; marca chasis por defecto = marca del equipo (DNRPA).
+            # operador. Si el ítem no tiene motor (o no se cargó su
+            # número), la marca motor queda vacía y el número pasa a "NO
+            # POSEE" —mismo criterio que ya usa Finning para lo que no
+            # aplica—, y simétricamente para chasis.
             id_tipo = dnrpa.get('tipo_generico', {}).get('codigo', '')
             peso = dnrpa.get('tipo_generico', {}).get('peso', '')
-            nro_motor = item.get('nro_motor', '')
-            marca_chasis = item.get('marca_chasis') or dnrpa.get('id_marca', '000')
-            nro_chasis = item.get('nro_chasis') or 'NO POSEE'
+            nro_motor_raw = item.get('nro_motor', '')
+            if nro_motor_raw:
+                marca_motor = dnrpa.get('id_marca', '')
+                nro_motor = nro_motor_raw
+            else:
+                marca_motor = ''
+                nro_motor = 'NO POSEE'
+            nro_chasis_raw = item.get('nro_chasis', '')
+            if nro_chasis_raw:
+                marca_chasis = item.get('marca_chasis') or dnrpa.get('id_marca', '')
+                nro_chasis = nro_chasis_raw
+            else:
+                marca_chasis = '000'
+                nro_chasis = 'NO POSEE'
         anio = str(item['anio_fab'])
 
         ws.cell(row=row, column=1).value = i + 1
@@ -800,7 +830,7 @@ def generar_excel(di, items_procesados, lcm_valor):
         ws.cell(row=row, column=5).value = lcm_excel
         ws.cell(row=row, column=6).value = anio
         ws.cell(row=row, column=7).value = anio
-        ws.cell(row=row, column=8).value = dnrpa.get('id_marca','')
+        ws.cell(row=row, column=8).value = marca_motor
         ws.cell(row=row, column=9).value = nro_motor
         ws.cell(row=row, column=10).value = marca_chasis
         ws.cell(row=row, column=11).value = nro_chasis
