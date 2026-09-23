@@ -940,9 +940,14 @@ for idx in range(st.session_state.n_items):
                 key=f"dnrpa_sel_{idx}",
             )
             dnrpa_files.append(dnrpa)
-            if idx < len(datos_items_cliente_nuevo) and datos_items_cliente_nuevo[idx].get('declaracion'):
-                texto_decl = datos_items_cliente_nuevo[idx]['declaracion'][:280].strip().title()
-                st.caption(f"📄 Declaración de mercadería (DI): {texto_decl}…")
+            # No se muestra el fragmento crudo de la Declaración de la
+            # Mercadería: el DI trae esa columna al lado de "Opciones /
+            # Ventajas" y el OCR mezcla ambas al leer renglón por renglón,
+            # quedando ilegible. Se usa igual puertas adentro para la
+            # detección de "eléctrico" (pre-selección de arriba); acá solo
+            # se avisa el resultado de esa detección, de forma corta.
+            if idx < len(datos_items_cliente_nuevo) and datos_items_cliente_nuevo[idx].get('es_electrico'):
+                st.caption("🔎 Se detectó \"motor eléctrico\" en este ítem del DI.")
     st.divider()
 
 st.markdown('<p class="section-title">3 · Datos adicionales</p>', unsafe_allow_html=True)
