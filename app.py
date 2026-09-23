@@ -613,12 +613,26 @@ def extraer_datos_por_posicion(text, PAISES, prefijos, ventana=500):
         fabricacion = codigos_ordenados[0]
         procedencia = codigos_ordenados[1] if len(codigos_ordenados) >= 2 else codigos_ordenados[0]
 
-        m_cant = re.search(r'CANTIDAD UNIDADES\s*(?:ESTADISTICAS)?\s*\n?\s*(\d+),\d{2}', chunk)
+        # FIX: la posición de "N,00" (la cantidad) respecto al encabezado
+        # "CANTIDAD UNIDADES ESTADISTICAS" NO es fija — el OCR a veces la
+        # imprime bien después del encabezado, pero en layouts de tabla
+        # ancha (todos los encabezados en una línea, todos los valores en
+        # la siguiente) puede terminar mucho más lejos, o incluso ANTES
+        # del encabezado. En cambio, la cantidad siempre aparece pegada a
+        # la palabra "UNIDAD" o "UNIDADES" (a veces es la unidad de medida
+        # del ítem —"UNIDAD 2,00"—, a veces es el propio "CANTIDAD
+        # UNIDADES\n2,00"), así que se ancla ahí en cualquiera de las dos
+        # formas en vez de en un único punto fijo del encabezado.
+        m_cant = re.search(r'\bUNIDAD(?:ES)?\b\s+(\d+),\d{2}', chunk)
         cantidad = int(m_cant.group(1)) if m_cant else 1
 
         idx_decl = text_norm_upper.find('DECLARACION DE LA MERCADERIA', pos_after)
         declaracion = text_norm_upper[idx_decl:idx_decl + 500] if idx_decl != -1 else ''
-        es_electrico = 'ELECTRIC' in declaracion
+        # FIX: el OCR a veces conserva la tilde ("ELÉCTRICO") y a veces la
+        # pierde ("ELECTRICO"); "ELECTRIC" sin tilde no matchea "ELÉCTRICO"
+        # porque la É acentuada es un carácter distinto de la E simple.
+        # Se chequean las dos variantes.
+        es_electrico = 'ELECTRIC' in declaracion or 'ELÉCTRIC' in declaracion
 
         for _ in range(max(cantidad, 1)):
             resultado.append({
