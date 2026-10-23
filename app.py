@@ -315,7 +315,11 @@ def parsear_di(text):
         alertas.append("⚠️ No se encontró CUIT del despachante. Se usará el valor por defecto.")
 
     m = re.search(r'(FINNING\s+\S+(?:\s+\S+){1,3})', text_norm.upper())
-    datos['importador'] = m.group(1).strip() if m else 'FINNING SOLUCIONES MINERAS SA'
+    importador_raw = m.group(1).strip() if m else 'FINNING SOLUCIONES MINERAS SA'
+    # Cortar cualquier texto desde el primer paréntesis en adelante (ej:
+    # "(IVA INS: SI)"), que no forma parte de la razón social.
+    importador_raw = re.split(r'\s*\(', importador_raw)[0].strip()
+    datos['importador'] = importador_raw
 
     # ─ País de fabricación / procedencia, POR ÍTEM ─
     # FIX: en despachos con varios ítems (ej: el motor + repuestos sueltos
